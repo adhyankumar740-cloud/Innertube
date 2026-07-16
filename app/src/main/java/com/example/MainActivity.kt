@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -182,6 +184,12 @@ class MainActivity : ComponentActivity() {
         // before anything else touches YouTube/playback, so login-gated stream fallback
         // clients (ANDROID_CREATOR, WEB_CREATOR, TVHTML5, ...) are available from the start.
         YouTubeSession.restore(applicationContext)
+
+        // If that didn't restore a logged-in visitorData (guest / never logged in), fetch an
+        // anonymous one. Without it, YTPlayerUtils can never generate a PoToken, and every
+        // client - WEB_REMIX and all its fallbacks - gets rejected as "Sign in to confirm
+        // you're not a bot", even for guests who were never expected to log in.
+        lifecycleScope.launch { YouTubeSession.ensureVisitorData() }
 
         maybeRequestNotificationPermission()
         maybeRequestIgnoreBatteryOptimizations()
