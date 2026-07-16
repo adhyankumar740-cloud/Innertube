@@ -406,6 +406,7 @@ class MusicPlayer(
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             val track = _currentTrack.value ?: return
+            _lastStreamErrorDebug.value = "[ExoPlayer onPlayerError - 1st] ${error.errorCodeName}: ${error.message} | cause=${error.cause?.javaClass?.simpleName}: ${error.cause?.message} (track=${track.title})"
             when (track.source) {
                 TrackSource.YOUTUBE -> {
                     val videoId = track.youtubeVideoId
@@ -420,10 +421,14 @@ class MusicPlayer(
                     } else {
                         Log.e("MusicPlayer", "Relay audio playback error again, giving up on this track", error)
                         _playbackError.value = "Yeh gaana stream nahi ho paya."
+                        _lastStreamErrorDebug.value = "[ExoPlayer onPlayerError] ${error.errorCodeName}: ${error.message} | cause=${error.cause?.javaClass?.simpleName}: ${error.cause?.message} (track=${track.title})"
                         registerPlaybackFailureAndMaybeStop()
                     }
                 }
-                TrackSource.ITUNES -> registerPlaybackFailureAndMaybeStop()
+                TrackSource.ITUNES -> {
+                    _lastStreamErrorDebug.value = "[ExoPlayer onPlayerError - ITUNES] ${error.errorCodeName}: ${error.message} (track=${track.title})"
+                    registerPlaybackFailureAndMaybeStop()
+                }
                 else -> {}
             }
         }
