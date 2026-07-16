@@ -261,6 +261,13 @@ object YTPlayerUtils {
         var bestFallbackClient: String? = null
         var successClient: String? = null
 
+        // Per-client outcome trail. The final thrown error previously only ever surfaced the
+        // LAST client's playabilityStatus.reason (e.g. "Video unavailable" from WEB), which hid
+        // *why* every earlier client — including WEB_REMIX's 403 and the normally-reliable
+        // VISIONOS fallback — had already been rejected. Surfacing the whole trail in the
+        // exception message lets the on-device debug dialog show a real diagnosis without adb.
+        val attemptLog = mutableListOf<String>()
+
         val hasHighQuality = mainPlayerResponse.streamingData?.adaptiveFormats?.any { it.audioQuality == "AUDIO_QUALITY_HIGH" } == true
 
         for (clientIndex in (startIndex until STREAM_FALLBACK_CLIENTS.size)) {
@@ -276,6 +283,7 @@ object YTPlayerUtils {
                 client = MAIN_CLIENT
                 if (client.clientName in disabledStreamClients) {
                     Timber.tag(logTag).d("Skipping MAIN_CLIENT ${client.clientName} — disabled in stream sources")
+                    attemptLog += "${client.clientName}: skipped (disabled in settings)"
                     continue
                 }
                 streamPlayerResponse = retryMainPlayerResponse ?: mainPlayerResponse
@@ -287,12 +295,14 @@ object YTPlayerUtils {
 
                 if (client.clientName in disabledStreamClients) {
                     Timber.tag(logTag).d("Skipping client ${client.clientName} — disabled in stream sources")
+                    attemptLog += "${client.clientName}: skipped (disabled in settings)"
                     continue
                 }
 
                 if (client.loginRequired && !isLoggedIn && YouTube.cookie == null) {
                     // skip client if it requires login but user is not logged in
                     Timber.tag(logTag).d("Skipping client ${client.clientName} - requires login but user is not logged in")
+                    attemptLog += "${client.clientName}: skipped (requires login)"
                     continue
                 }
 
@@ -305,6 +315,7 @@ object YTPlayerUtils {
                     YouTube.player(videoId, playlistId, client, clientSigTimestamp, clientPoToken)
                         .onFailure {
                             Timber.tag(logTag).e(it, "player() request FAILED for %s", client.clientName)
+                            attemptLog += "${client.clientName}: request threw ${it::class.simpleName}: ${it.message}"
                         }.getOrNull()
             }
 
@@ -341,6 +352,7 @@ object YTPlayerUtils {
 
                 if (format == null) {
                     Timber.tag(logTag).d("No suitable format found for client: ${if (clientIndex == -1) MAIN_CLIENT.clientName else STREAM_FALLBACK_CLIENTS[clientIndex].clientName}")
+                    attemptLog += "${client.clientName}: OK but no suitable audio format"
                     continue
                 }
 
@@ -349,6 +361,7 @@ object YTPlayerUtils {
                 streamUrl = findUrlOrNull(format, videoId, responseToUse, skipNewPipe = wasOriginallyAgeRestricted)
                 if (streamUrl == null) {
                     Timber.tag(logTag).d("Stream URL not found for format")
+                    attemptLog += "${client.clientName}: OK but could not deobfuscate/find stream URL (cipher failed)"
                     continue
                 }
 
@@ -418,6 +431,7 @@ object YTPlayerUtils {
                 streamExpiresInSeconds = streamPlayerResponse.streamingData?.expiresInSeconds
                 if (streamExpiresInSeconds == null) {
                     Timber.tag(logTag).d("Stream expiration time not found")
+                    attemptLog += "${client.clientName}: OK but missing stream expiry"
                     continue
                 }
 
@@ -461,6 +475,7 @@ object YTPlayerUtils {
                     Timber.tag(logTag).d("Using last fallback client without validation: ${STREAM_FALLBACK_CLIENTS[clientIndex].clientName}")
                     Timber.tag(TAG)
                         .i("Playback: client=${currentClient.clientName}, videoId=$videoId")
+                    attemptLog += "${client.clientName}: SUCCESS (last resort, unvalidated)"
                     successClient = currentClient.clientName
                     break
                 }
@@ -474,6 +489,7 @@ object YTPlayerUtils {
                 ) {
                     Timber.tag(logTag).d("WEB_REMIX — skipping HEAD validation, letting ExoPlayer try directly")
                     Timber.tag(TAG).i("Playback: client=${currentClient.clientName}, videoId=$videoId")
+                    attemptLog += "${client.clientName}: SUCCESS (unvalidated, handed to ExoPlayer directly)"
                     successClient = currentClient.clientName
                     break
                 }
@@ -483,10 +499,12 @@ object YTPlayerUtils {
                     Timber.tag(logTag).d("Stream validated successfully with client: ${currentClient.clientName}")
                     // Log for release builds
                     Timber.tag(TAG).i("Playback: client=${currentClient.clientName}, videoId=$videoId")
+                    attemptLog += "${client.clientName}: SUCCESS (HEAD validated)"
                     successClient = currentClient.clientName
                     break
                 } else {
                     Timber.tag(logTag).d("Stream validation failed for client: ${currentClient.clientName}")
+                    attemptLog += "${client.clientName}: OK response but stream URL failed HEAD validation (likely bad/stale signature or poToken)"
                     // A cipher client failing validation can mean a wrong-but-non-throwing signature
                     // from a stale/wrong player config — caught here at resolution, so it never
                     // reaches ExoPlayer and MusicService's 403 handler never fires. Ask the cipher to
@@ -500,7 +518,10 @@ object YTPlayerUtils {
                     }
                 }
             } else {
-                Timber.tag(logTag).d("Player response status not OK: ${streamPlayerResponse?.playabilityStatus?.status}, reason: ${streamPlayerResponse?.playabilityStatus?.reason}")
+                val status = streamPlayerResponse?.playabilityStatus?.status
+                val reason = streamPlayerResponse?.playabilityStatus?.reason
+                Timber.tag(logTag).d("Player response status not OK: $status, reason: $reason")
+                attemptLog += "${client.clientName}: status=$status reason=$reason"
             }
         }
 
@@ -513,24 +534,26 @@ object YTPlayerUtils {
             successClient = bestFallbackClient
         }
 
+        val attemptTrail = if (attemptLog.isNotEmpty()) " | tried: ${attemptLog.joinToString("; ")}" else ""
+
         if (streamPlayerResponse == null) {
-            Timber.tag(logTag).e("Bad stream player response - all clients failed")
+            Timber.tag(logTag).e("Bad stream player response - all clients failed$attemptTrail")
             if (isUploadedTrack) {
-                println("[PLAYBACK_DEBUG] FAILURE: All clients failed for uploaded track videoId=$videoId")
+                println("[PLAYBACK_DEBUG] FAILURE: All clients failed for uploaded track videoId=$videoId$attemptTrail")
             }
-            throw Exception("Bad stream player response")
+            throw Exception("Bad stream player response$attemptTrail")
         }
 
         if (streamPlayerResponse.playabilityStatus.status != "OK") {
             val errorReason = streamPlayerResponse.playabilityStatus.reason
             // YouTube often surfaces generic reasons (e.g. "error 2000") for restricted or
             // unavailable streams; Metrolist cannot recover those without official playback.
-            Timber.tag(logTag).e("Playability status not OK: $errorReason")
+            Timber.tag(logTag).e("Playability status not OK: $errorReason$attemptTrail")
             if (isUploadedTrack) {
-                println("[PLAYBACK_DEBUG] FAILURE: Playability not OK for uploaded track - status=${streamPlayerResponse.playabilityStatus.status}, reason=$errorReason")
+                println("[PLAYBACK_DEBUG] FAILURE: Playability not OK for uploaded track - status=${streamPlayerResponse.playabilityStatus.status}, reason=$errorReason$attemptTrail")
             }
             throw PlaybackException(
-                errorReason,
+                "$errorReason$attemptTrail",
                 null,
                 PlaybackException.ERROR_CODE_REMOTE_ERROR
             )
