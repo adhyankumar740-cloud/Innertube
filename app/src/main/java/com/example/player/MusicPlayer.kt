@@ -447,7 +447,8 @@ class MusicPlayer(
             } catch (e: Exception) {
                 Log.e("MusicPlayer", "Stream resolve retry failed for $videoId, giving up on this track", e)
                 if (loadedYoutubeVideoId != videoId) return@launch
-                _playbackError.value = "Yeh gaana stream nahi ho paya."
+                // TEMP DEBUG: show the real exception on-screen (phone-only debugging, no adb).
+                _playbackError.value = "Stream fail: ${e.javaClass.simpleName}: ${e.message}"
                 registerPlaybackFailureAndMaybeStop()
             }
         }
@@ -889,7 +890,9 @@ class MusicPlayer(
                     relayRetriedForVideoId = videoId
                     retryRelayResolve(track, videoId, catchUp, autoPlay)
                 } else {
-                    _playbackError.value = "Yeh gaana stream nahi ho paya."
+                    // TEMP DEBUG: include the real exception so it's visible on-screen
+                    // (via the Snackbar in MainActivity) without needing adb/logcat.
+                    _playbackError.value = "Stream fail: ${e.javaClass.simpleName}: ${e.message}"
                     registerPlaybackFailureAndMaybeStop()
                 }
             }
