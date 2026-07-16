@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nirvana Music - Admin Panel</title>
+<style>
+  :root {
+    --bg: #0c0c0e;
+    --surface: #16161a;
+    --surface-2: #22222b;
+    --primary: #6bd2ff;
+    --text: #ececec;
+    --muted: #9e9e9e;
+    --danger: #ff4d6d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 480px;
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+  }
+  p.subtitle {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 0 0 24px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin: 16px 0 6px;
+  }
+  input[type="text"], input[type="password"], textarea {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  textarea { min-height: 100px; resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: var(--primary); }
+  button {
+    margin-top: 20px;
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    background: var(--primary);
+    color: #000;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    border: 1px solid #444;
+    color: var(--text);
+    margin-top: 10px;
+  }
+  button.danger {
+    background: transparent;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    margin-top: 10px;
+  }
+  #status {
+    margin-top: 14px;
+    font-size: 13px;
+    min-height: 18px;
+  }
+  #status.ok { color: #6bffb0; }
+  #status.err { color: var(--danger); }
+  #current-box {
+    margin-top: 24px;
+    padding: 14px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    font-size: 13px;
+    color: var(--muted);
+    display: none;
+  }
+  #current-box.visible { display: block; }
+  #current-box b { color: var(--text); }
+  #gate { text-align: center; }
+</style>
+</head>
+<body>
+
+  <div class="card" id="gate">
+    <h1>Nirvana Music Admin</h1>
+    <p class="subtitle">Enter the admin password to manage announcement popups.</p>
+    <label for="password">Admin password</label>
+    <input type="password" id="password" placeholder="Password" />
+    <button id="unlock-btn">Unlock</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="card" id="panel" style="display:none;">
+    <h1>Send an Announcement</h1>
+    <p class="subtitle">This is shown to users as a popup - at most once per day per device.</p>
+
+    <label for="title">Title</label>
+    <input type="text" id="title" placeholder="e.g. New feature!" />
+
+    <label for="message">Message</label>
+    <textarea id="message" placeholder="What do you want to tell your users?"></textarea>
+
+    <button id="send-btn">Send Announcement</button>
+    <button id="deactivate-btn" class="danger">Deactivate current announcement</button>
+    <button id="lock-btn" class="secondary">Lock</button>
+
+    <div id="status"></div>
+
+    <div id="current-box">
+      <div><b>Current live announcement:</b></div>
+      <div id="current-title"></div>
+      <div id="current-message"></div>
+      <div id="current-meta"></div>
+    </div>
+  </div>
+
+  <!-- Firebase (compat build - simplest for a single static HTML file, no bundler needed) -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+
+  <script>
+    // ---------------------------------------------------------------------
+    // Firebase config - values taken from this project's app/google-services.json.
+    // A Firebase Web API key is NOT a secret (it just identifies the
+    // project to Google's servers); actual write access is controlled by
+    // the Realtime Database security rules below, not by hiding this key.
+    // ---------------------------------------------------------------------
+    const firebaseConfig = {
+      apiKey: "AIzaSyAsf_lg8Mqh9Fcya5qEwEJ1zI67Tv1DAAM",
+      databaseURL: "https://nirvanamusic-75348-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "nirvanamusic-75348",
+      storageBucket: "nirvanamusic-75348.firebasestorage.app",
+      messagingSenderId: "645739166879",
+      appId: "1:645739166879:android:ff1dd080d4241f6745f6aa"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const auth = firebase.auth();
+
+    // ---------------------------------------------------------------------
+    // Simple client-side password gate. This is NOT real security by
+    // itself (anyone could read this file's source) - the real access
+    // control is the Firebase Realtime Database rule below, which only
+    // allows writes from an authenticated (signed-in) client. This gate
+    // just keeps casual/accidental visitors from sending announcements.
+    //
+    // For real production use, replace this with Firebase Auth email/
+    // password sign-in (swap signInAnonymously() for
+    // signInWithEmailAndPassword()) and lock the DB rule to specific
+    // admin UIDs instead of "auth != null".
+    // ---------------------------------------------------------------------
+    const ADMIN_PASSWORD = "nirvana-admin"; // change this before deploying
+
+    const gateEl = document.getElementById("gate");
+    const panelEl = document.getElementById("panel");
+    const statusEls = document.querySelectorAll("#status");
+
+    function setStatus(el, msg, kind) {
+      el.textContent = msg;
+      el.className = kind || "";
+    }
+
+    document.getElementById("unlock-btn").addEventListener("click", async () => {
+      const pw = document.getElementById("password").value;
+      const statusEl = gateEl.querySelector("#status");
+      if (pw !== ADMIN_PASSWORD) {
+        setStatus(statusEl, "Wrong password.", "err");
+        return;
+      }
+      try {
+        await auth.signInAnonymously();
+        gateEl.style.display = "none";
+        panelEl.style.display = "block";
+        loadCurrentAnnouncement();
+      } catch (e) {
+        setStatus(statusEl, "Firebase sign-in failed: " + e.message, "err");
+      }
+    });
+
+    document.getElementById("lock-btn").addEventListener("click", () => {
+      panelEl.style.display = "none";
+      gateEl.style.display = "block";
+      document.getElementById("password").value = "";
+    });
+
+    async function loadCurrentAnnouncement() {
+      const box = document.getElementById("current-box");
+      const snap = await db.ref("announcements/current").get();
+      if (!snap.exists()) {
+        box.classList.remove("visible");
+        return;
+      }
+      const data = snap.val();
+      document.getElementById("current-title").innerHTML = "<b>" + escapeHtml(data.title || "") + "</b>";
+      document.getElementById("current-message").textContent = data.message || "";
+      const when = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : "unknown time";
+      document.getElementById("current-meta").textContent =
+        (data.active ? "Active" : "Inactive") + " - updated " + when;
+      box.classList.add("visible");
+    }
+
+    function escapeHtml(str) {
+      const d = document.createElement("div");
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    document.getElementById("send-btn").addEventListener("click", async () => {
+      const statusEl = panelEl.querySelector("#status");
+      const title = document.getElementById("title").value.trim();
+      const message = document.getElementById("message").value.trim();
+
+      if (!message) {
+        setStatus(statusEl, "Message can't be empty.", "err");
+        return;
+      }
+
+      try {
+        const id = db.ref("announcements/history").push().key;
+        const payload = {
+          id: id,
+          title: title || "Announcement",
+          message: message,
+          active: true,
+          updatedAt: firebase.database.ServerValue.TIMESTAMP
+        };
+        // Write to /current (what the app reads) and keep a copy under
+        // /history (for the admin panel's own record - the app never
+        // reads this path).
+        await db.ref("announcements/current").set(payload);
+        await db.ref("announcements/history/" + id).set(payload);
+
+        setStatus(statusEl, "Announcement sent! It'll show in the app within one day.", "ok");
+        document.getElementById("title").value = "";
+        document.getElementById("message").value = "";
+        loadCurrentAnnouncement();
+      } catch (e) {
+        setStatus(statusEl, "Failed to send: " + e.message, "err");
+      }
+    });
+
+    document.getElementById("deactivate-btn").addEventListener("click", async () => {
+      const statusEl = panelEl.querySelector("#status");
+      try {
+        await db.ref("announcements/current/active").set(false);
+        setStatus(statusEl, "Current announcement deactivated.", "ok");
+        loadCurrentAnnouncement();
+      } catch (e) {
+        setStatus(statusEl, "Failed: " + e.message, "err");
+      }
+    });
+  </script>
+</body>
+</html>

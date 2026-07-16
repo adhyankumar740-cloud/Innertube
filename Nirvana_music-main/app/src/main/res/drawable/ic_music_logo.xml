@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Replacement for the corrupt (0-byte) ic_music_logo_1783342219708.jpg
+     that shipped in the export. Simple vector music-note mark using the
+     app's Neon Green brand color so the adaptive launcher icon renders
+     correctly on all densities without shipping a raster asset. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="66dp"
+    android:height="66dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00FF9D"
+        android:pathData="M9,17.5 a3,2.3 0 1,0 6,0 a3,2.3 0 1,0 -6,0 Z" />
+    <path
+        android:fillColor="#00FF9D"
+        android:pathData="M14,17.5 L14,4.5 L19,3 L19,6 L16,7 L16,17.5 Z" />
+</vector>

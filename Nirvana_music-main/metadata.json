@@ -1,0 +1,6 @@
+{
+  "name": "Harmonix",
+  "description": "A premium music application featuring interactive vertical swipe Samples feed powered by iTunes, personalized playlists, and real-time group Jam sessions with rich features.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

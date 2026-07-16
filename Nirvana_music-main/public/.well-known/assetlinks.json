@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.aistudio.harmonixmusic.vkzpnb",
+      "sha256_cert_fingerprints": [
+        "2F:9C:82:F1:29:56:C3:B7:DE:A6:25:7B:47:26:7D:FA:BA:87:CA:05:0B:69:F0:49:ED:32:D0:22:4D:2E:92:63"
+      ]
+    }
+  }
+]
+
