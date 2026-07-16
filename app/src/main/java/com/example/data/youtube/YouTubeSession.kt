@@ -1,95 +1,195 @@
-package com.example.data.youtube
+package com.example.ui.screens
 
-import android.content.Context
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import com.example.data.youtube.YouTubeSession
+import com.example.data.youtube.reportException
 import com.metrolist.innertube.YouTube
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import timber.log.Timber
 
 /**
- * Persists the real YouTube Music login (InnerTube cookie + visitorData + dataSyncId) and
- * restores it into [YouTube] on app start.
+ * Real YouTube Music login: opens accounts.google.com inside a WebView (same flow as signing in
+ * on music.youtube.com in a browser), then scrapes the resulting session cookie + visitorData +
+ * dataSyncId out of the WebView once login completes, and saves them via [YouTubeSession].
  *
- * This did not exist anywhere in the app before: `YouTube.cookie` was read in [YTPlayerUtils]
- * (to decide whether login-gated stream clients like ANDROID_CREATOR / WEB_CREATOR / TVHTML5
- * can be tried) but nothing ever *set* it, and nothing persisted it across process restarts.
- * The separate "Sign in with Google" screen (AuthScreen/AuthViewModel) is unrelated — it's a
- * cosmetic profile login via Credential Manager and never touches this.
+ * This is the piece that was missing from the app. It is unrelated to the existing "Sign in
+ * with Google" screen (AuthScreen/AuthViewModel) — that one is a cosmetic profile login via
+ * Credential Manager and never sets `YouTube.cookie`. Only a session obtained here unlocks the
+ * login-gated stream fallback clients (ANDROID_CREATOR, WEB_CREATOR, TVHTML5, ...) in
+ * YTPlayerUtils.
  *
- * Call [restore] once, early in Application/MainActivity.onCreate, before any playback or
- * InnerTube network call happens.
+ * @param onClose called when the user backs out without completing login.
+ * @param onLoginSuccess called after the session is validated and saved. Restarting the app
+ *   (as stock Metrolist does) is the safest way to make sure MusicService/the player picks up
+ *   the new cookie everywhere — see the integration notes for the recommended restart snippet.
+ *   If you'd rather just pop the screen and rely on YouTubeSession's StateFlow for
+ *   recomposition, pass an empty lambda instead.
  */
-object YouTubeSession {
-    private const val PREFS_NAME = "youtube_session"
-    private const val KEY_COOKIE = "innertube_cookie"
-    private const val KEY_VISITOR_DATA = "visitor_data"
-    private const val KEY_DATA_SYNC_ID = "data_sync_id"
-    private const val KEY_ACCOUNT_NAME = "account_name"
-    private const val KEY_ACCOUNT_EMAIL = "account_email"
+@SuppressLint("SetJavaScriptEnabled")
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun YouTubeLoginScreen(
+    onClose: () -> Unit,
+    onLoginSuccess: () -> Unit,
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    private const val TAG = "YouTubeSession"
+    var visitorData by remember { mutableStateOf<String?>(null) }
+    var dataSyncId by remember { mutableStateOf<String?>(null) }
+    var isCompletingLogin by remember { mutableStateOf(false) }
 
-    private lateinit var prefs: android.content.SharedPreferences
+    var webView: WebView? = null
 
-    private val _isLoggedIn = MutableStateFlow(false)
-    val isLoggedIn = _isLoggedIn.asStateFlow()
+    fun completeLogin(closeOnNoCookie: Boolean = true) {
+        if (isCompletingLogin) return
+        isCompletingLogin = true
 
-    private val _accountName = MutableStateFlow("")
-    val accountName = _accountName.asStateFlow()
+        coroutineScope.launch {
+            val currentCookie = CookieManager.getInstance()
+                .getCookie("https://music.youtube.com")
+                .orEmpty()
 
-    private val _accountEmail = MutableStateFlow("")
-    val accountEmail = _accountEmail.asStateFlow()
+            if (currentCookie.isBlank()) {
+                Timber.tag("YouTubeLoginScreen").d("No YouTube Music cookie found yet")
+                isCompletingLogin = false
+                if (closeOnNoCookie) onClose()
+                // else: auto-detect path — just wait, a later onPageFinished will retry.
+                return@launch
+            }
 
-    /** Loads any saved cookie/visitorData/dataSyncId into [YouTube]. Safe to call multiple times. */
-    fun restore(context: Context) {
-        prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            // Apply provisionally so accountInfo() below authenticates with it.
+            YouTube.cookie = currentCookie
+            YouTube.dataSyncId = dataSyncId
+            YouTube.visitorData = visitorData
 
-        val cookie = prefs.getString(KEY_COOKIE, null)
-        if (!cookie.isNullOrBlank()) {
-            YouTube.cookie = cookie
-            YouTube.visitorData = prefs.getString(KEY_VISITOR_DATA, null)
-            YouTube.dataSyncId = prefs.getString(KEY_DATA_SYNC_ID, null)
-            _accountName.value = prefs.getString(KEY_ACCOUNT_NAME, "") ?: ""
-            _accountEmail.value = prefs.getString(KEY_ACCOUNT_EMAIL, "") ?: ""
-            _isLoggedIn.value = true
-            Timber.tag(TAG).d("Restored saved YouTube Music session")
-        } else {
-            Timber.tag(TAG).d("No saved YouTube Music session found")
+            delay(500) // let cookies finish flushing to the WebView's CookieManager
+
+            Timber.tag("YouTubeLoginScreen").d("Validating session...")
+
+            YouTube.accountInfo()
+                .onSuccess { info ->
+                    YouTubeSession.save(
+                        cookie = currentCookie,
+                        visitorData = visitorData,
+                        dataSyncId = dataSyncId,
+                        accountName = info.name,
+                        accountEmail = info.email.orEmpty(),
+                    )
+
+                    Timber.tag("YouTubeLoginScreen").d("Logged in as ${info.name}")
+
+                    webView?.apply {
+                        stopLoading()
+                        clearHistory()
+                        clearCache(true)
+                        clearFormData()
+                    }
+
+                    onLoginSuccess()
+                }
+                .onFailure {
+                    Timber.tag("YouTubeLoginScreen").e(it, "Login validation failed")
+                    reportException(it)
+                    // Roll back the provisional assignment above — don't leave a bad
+                    // cookie/session sitting in the in-memory YouTube object.
+                    YouTube.cookie = null
+                    YouTube.dataSyncId = null
+                    YouTube.visitorData = null
+                    isCompletingLogin = false
+                    onClose()
+                }
         }
     }
 
-    /** Saves a freshly obtained login and applies it to [YouTube] immediately. */
-    fun save(
-        cookie: String,
-        visitorData: String?,
-        dataSyncId: String?,
-        accountName: String,
-        accountEmail: String,
-    ) {
-        prefs.edit()
-            .putString(KEY_COOKIE, cookie)
-            .putString(KEY_VISITOR_DATA, visitorData)
-            .putString(KEY_DATA_SYNC_ID, dataSyncId)
-            .putString(KEY_ACCOUNT_NAME, accountName)
-            .putString(KEY_ACCOUNT_EMAIL, accountEmail)
-            .apply()
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { webViewContext ->
+            WebView(webViewContext).apply {
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        loadUrl("javascript:Android.onRetrieveVisitorData(window.yt.config_.VISITOR_DATA)")
+                        loadUrl("javascript:Android.onRetrieveDataSyncId(window.yt.config_.DATASYNC_ID)")
 
-        YouTube.cookie = cookie
-        YouTube.visitorData = visitorData
-        YouTube.dataSyncId = dataSyncId
-        _accountName.value = accountName
-        _accountEmail.value = accountEmail
-        _isLoggedIn.value = true
-    }
+                        // Previously login only ever completed when the user manually tapped
+                        // the back arrow / pressed system back — if they never did that, the
+                        // screen just sat on the now-logged-in music.youtube.com page forever
+                        // with nothing in the app reacting. Once Google finishes the login
+                        // redirect chain and the WebView lands on music.youtube.com itself
+                        // (not accounts.google.com/a Google verification/consent step), the
+                        // cookie is already set — so complete automatically instead of waiting.
+                        val landedOnYouTubeMusic = url != null &&
+                            (android.net.Uri.parse(url).host == "music.youtube.com")
+                        if (landedOnYouTubeMusic) {
+                            completeLogin(closeOnNoCookie = false)
+                        }
+                    }
+                }
+                settings.apply {
+                    javaScriptEnabled = true
+                    setSupportZoom(true)
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                }
+                addJavascriptInterface(
+                    object {
+                        @JavascriptInterface
+                        fun onRetrieveVisitorData(newVisitorData: String?) {
+                            if (newVisitorData != null) visitorData = newVisitorData
+                        }
 
-    /** Signs out: clears the saved session and the in-memory [YouTube] state. */
-    fun logout() {
-        prefs.edit().clear().apply()
-        YouTube.cookie = null
-        YouTube.visitorData = null
-        YouTube.dataSyncId = null
-        _accountName.value = ""
-        _accountEmail.value = ""
-        _isLoggedIn.value = false
+                        @JavascriptInterface
+                        fun onRetrieveDataSyncId(newDataSyncId: String?) {
+                            if (newDataSyncId != null) dataSyncId = newDataSyncId.substringBefore("||")
+                        }
+                    },
+                    "Android",
+                )
+                webView = this
+                loadUrl("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com")
+            }
+        },
+    )
+
+    TopAppBar(
+        title = { Text("Sign in to YouTube Music") },
+        navigationIcon = {
+            IconButton(onClick = { completeLogin() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+        },
+    )
+
+    BackHandler {
+        val currentWebView = webView
+        if (currentWebView?.canGoBack() == true) {
+            currentWebView.goBack()
+        } else {
+            completeLogin()
+        }
     }
 }
