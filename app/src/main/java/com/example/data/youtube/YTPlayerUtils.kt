@@ -175,6 +175,16 @@ object YTPlayerUtils {
 
         // Generate PoToken
         var poToken: PoTokenResult? = null
+        // BUFFER-THEN-SKIP FIX: MainActivity kicks off YouTubeSession.ensureVisitorData()
+        // in a fire-and-forget lifecycleScope.launch{} on app start, but playback can (and
+        // routinely does, e.g. tapping a song right after cold start) begin before that
+        // coroutine has finished. YouTube.visitorData was still null at THIS exact read,
+        // so no PoToken was ever generated, WEB_REMIX + every fallback client got rejected
+        // as a bot, MusicPlayer retried once and then auto-advanced (advance(1)) - which is
+        // exactly the "buffers, then jumps to next track" symptom, for every single track,
+        // until one happened to race the fetch finishing. Awaiting it here (cheap no-op if
+        // it's already set) makes every playback attempt correct regardless of timing.
+        YouTubeSession.ensureVisitorData()
         val sessionId = YouTube.visitorData
         if (MAIN_CLIENT.useWebPoTokens && sessionId != null) {
             Timber.tag(logTag).d("Generating PoToken for WEB_REMIX with sessionId")
