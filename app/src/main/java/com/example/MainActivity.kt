@@ -15,10 +15,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.announcement.Announcement
 import com.example.data.model.Track
+import com.example.data.youtube.YouTubeSession
 import com.example.di.AppContainer
 import com.example.ui.screens.AddToPlaylistDialog
 import com.example.ui.screens.AnnouncementDialog
@@ -67,6 +74,7 @@ import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SamplesScreen
+import com.example.ui.screens.YouTubeLoginScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.JamViewModel
@@ -170,6 +178,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Restore any previously saved YouTube Music login (cookie/visitorData/dataSyncId)
+        // before anything else touches YouTube/playback, so login-gated stream fallback
+        // clients (ANDROID_CREATOR, WEB_CREATOR, TVHTML5, ...) are available from the start.
+        YouTubeSession.restore(applicationContext)
+
         maybeRequestNotificationPermission()
         maybeRequestIgnoreBatteryOptimizations()
 
@@ -221,6 +234,26 @@ fun MainAppLayout(
     playlistViewModel: PlaylistViewModel,
     appContainer: AppContainer
 ) {
+    // Real YouTube Music login (separate from the "Sign in with Google" profile login above) -
+    // unlocks login-gated stream fallback clients (ANDROID_CREATOR, WEB_CREATOR, TVHTML5, ...).
+    // See YouTubeSession/YouTubeLoginScreen.
+    var showYouTubeLogin by remember { mutableStateOf(false) }
+    val isYouTubeLoggedIn by YouTubeSession.isLoggedIn.collectAsState()
+
+    if (showYouTubeLogin) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        YouTubeLoginScreen(
+            onClose = { showYouTubeLogin = false },
+            onLoginSuccess = {
+                val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                context.startActivity(intent)
+                Runtime.getRuntime().exit(0)
+            }
+        )
+        return
+    }
+
     val selectedTab by musicViewModel.selectedTab.collectAsState()
 
     // "Play Full Song" on the Samples feed starts playback in musicViewModel.player
@@ -396,16 +429,39 @@ fun MainAppLayout(
             // Dropping the reservation while the IME is visible fixes that.
             val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
             val reserveTrayGap = currentTrack != null && !imeVisible && selectedTab != "jam"
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(bottom = if (reserveTrayGap) 72.dp else 0.dp)
             ) {
-                when (selectedTab) {
-                    "home" -> HomeScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
-                    "samples" -> SamplesScreen(samplesViewModel = samplesViewModel)
-                    "jam" -> JamScreen(jamViewModel = jamViewModel, authViewModel = authViewModel)
-                    "library" -> LibraryScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
+                if (!isYouTubeLoggedIn) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showYouTubeLogin = true }
+                            .background(MaterialTheme.colorScheme.errorContainer)
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Connect YouTube Music for more reliable playback",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            "Connect",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    when (selectedTab) {
+                        "home" -> HomeScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
+                        "samples" -> SamplesScreen(samplesViewModel = samplesViewModel)
+                        "jam" -> JamScreen(jamViewModel = jamViewModel, authViewModel = authViewModel)
+                        "library" -> LibraryScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
+                    }
                 }
             }
 
