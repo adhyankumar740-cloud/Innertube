@@ -410,6 +410,18 @@ class MusicPlayer(
             when (track.source) {
                 TrackSource.YOUTUBE -> {
                     val videoId = track.youtubeVideoId
+                    // ROOT CAUSE FIX: this is exactly the "WEB_REMIX URL 403'd on the real
+                    // ExoPlayer GET" case YTPlayerUtils.markWebRemixFailed()/webRemixFailedIds
+                    // was built for (see its doc comment) - resolution skips HEAD-validating
+                    // WEB_REMIX and lets ExoPlayer try it directly to save a round-trip, but
+                    // nothing was ever calling markWebRemixFailed() when that direct try then
+                    // failed here - so every retry kept re-resolving the SAME fragile WEB_REMIX
+                    // client instead of falling through to a validated fallback client
+                    // (VISIONOS etc.). That's why every track was consistently 403ing instead
+                    // of just occasionally.
+                    if (videoId != null) {
+                        com.example.data.youtube.YTPlayerUtils.markWebRemixFailed(videoId)
+                    }
                     // Ek hi videoId ke liye ek baar relay ko fresh URL ke saath
                     // phir try karte hain (aksar error expired/one-time signed
                     // url ki wajah se hoti hai, poore video ke unavailable hone
