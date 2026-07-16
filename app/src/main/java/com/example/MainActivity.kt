@@ -249,6 +249,29 @@ fun MainAppLayout(
         musicViewModel.player.clearPlaybackError()
     }
 
+    // PHONE-ONLY DEBUG DIALOG: playbackError above gets reset to null the
+    // instant the *next* track starts trying (see MusicPlayer.playYoutubeTrack),
+    // so during an auto-skip cascade the real exception text was visible in
+    // the Snackbar for well under a second before being overwritten/dismissed
+    // - impossible to read or screenshot in time. lastStreamErrorDebug is never
+    // silently cleared, and this dialog stays up until manually dismissed, so
+    // the actual underlying exception can finally be read/screenshotted
+    // without adb/logcat/a computer. Remove this once the root cause is found.
+    val debugError by musicViewModel.player.lastStreamErrorDebug.collectAsState()
+    var dismissedDebugError by remember { mutableStateOf<String?>(null) }
+    if (debugError != null && debugError != dismissedDebugError) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { dismissedDebugError = debugError },
+            title = { androidx.compose.material3.Text("Playback debug error") },
+            text = { androidx.compose.material3.Text(debugError ?: "") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { dismissedDebugError = debugError }) {
+                    androidx.compose.material3.Text("OK")
+                }
+            }
+        )
+    }
+
     // Admin Panel announcement/update popup (see public/admin/index.html),
     // checked once per app launch and shown at most once per day.
     var announcementToShow by remember { mutableStateOf<Announcement?>(null) }
