@@ -45,15 +45,16 @@ import timber.log.Timber
  * @param onClose called when the user backs out without completing login.
  * @param onLoginSuccess called after the session is validated and saved. Restarting the app
  *   (as stock Metrolist does) is the safest way to make sure MusicService/the player picks up
- *   the new cookie everywhere, so that's the default; pass a no-op if you'd rather just pop the
- *   screen and rely on YouTubeSession's StateFlow for recomposition.
+ *   the new cookie everywhere — see the integration notes for the recommended restart snippet.
+ *   If you'd rather just pop the screen and rely on YouTubeSession's StateFlow for
+ *   recomposition, pass an empty lambda instead.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YouTubeLoginScreen(
     onClose: () -> Unit,
-    onLoginSuccess: () -> Unit = { restartApp(); },
+    onLoginSuccess: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -64,7 +65,7 @@ fun YouTubeLoginScreen(
 
     var webView: WebView? = null
 
-    fun completeLogin() {
+    fun completeLogin(closeOnNoCookie: Boolean = true) {
         if (isCompletingLogin) return
         isCompletingLogin = true
 
@@ -74,9 +75,10 @@ fun YouTubeLoginScreen(
                 .orEmpty()
 
             if (currentCookie.isBlank()) {
-                Timber.tag("YouTubeLoginScreen").d("No YouTube Music cookie found on close, leaving login screen")
+                Timber.tag("YouTubeLoginScreen").d("No YouTube Music cookie found yet")
                 isCompletingLogin = false
-                onClose()
+                if (closeOnNoCookie) onClose()
+                // else: auto-detect path — just wait, a later onPageFinished will retry.
                 return@launch
             }
 
@@ -132,6 +134,19 @@ fun YouTubeLoginScreen(
                     override fun onPageFinished(view: WebView, url: String?) {
                         loadUrl("javascript:Android.onRetrieveVisitorData(window.yt.config_.VISITOR_DATA)")
                         loadUrl("javascript:Android.onRetrieveDataSyncId(window.yt.config_.DATASYNC_ID)")
+
+                        // Previously login only ever completed when the user manually tapped
+                        // the back arrow / pressed system back — if they never did that, the
+                        // screen just sat on the now-logged-in music.youtube.com page forever
+                        // with nothing in the app reacting. Once Google finishes the login
+                        // redirect chain and the WebView lands on music.youtube.com itself
+                        // (not accounts.google.com/a Google verification/consent step), the
+                        // cookie is already set — so complete automatically instead of waiting.
+                        val landedOnYouTubeMusic = url != null &&
+                            (android.net.Uri.parse(url).host == "music.youtube.com")
+                        if (landedOnYouTubeMusic) {
+                            completeLogin(closeOnNoCookie = false)
+                        }
                     }
                 }
                 settings.apply {
@@ -177,13 +192,4 @@ fun YouTubeLoginScreen(
             completeLogin()
         }
     }
-}
-
-/** Hard-restarts the app so every component (MusicService included) picks up the new session. */
-private fun restartApp() {
-    // Intentionally left for the call site to override — see [onLoginSuccess] default above.
-    // Kept as a named no-op here rather than referencing an Activity Context directly, since a
-    // top-level function has none. Wire this to context.packageManager.getLaunchIntentForPackage(...)
-    // from your call site, or just pass your own onLoginSuccess lambda that does the restart
-    // (recommended — see integration notes).
 }
