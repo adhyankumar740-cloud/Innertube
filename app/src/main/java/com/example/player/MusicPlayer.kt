@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 
 enum class RepeatMode { OFF, ONE, ALL }
 
@@ -166,6 +168,15 @@ class MusicPlayer(
 
     private val _playbackError = MutableStateFlow<String?>(null)
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
+
+    // DEBUG: unlike _playbackError (which playYoutubeTrack resets to null the
+    // instant the NEXT track starts trying, so a real exception message was
+    // getting wiped out within milliseconds during auto-skip cascades before
+    // anyone could ever read it), this only ever gets overwritten by a fresh
+    // error - never silently cleared - so the phone-only debugging dialog in
+    // MainActivity can actually show it long enough to screenshot.
+    private val _lastStreamErrorDebug = MutableStateFlow<String?>(null)
+    val lastStreamErrorDebug: StateFlow<String?> = _lastStreamErrorDebug.asStateFlow()
 
     private var hasReachedPlayingState = false
     private var consecutivePlaybackFailures = 0
@@ -421,8 +432,10 @@ class MusicPlayer(
     private fun retryRelayResolve(track: Track, videoId: String, catchUp: RemoteCatchUp?, autoPlay: Boolean = true) {
         scope.launch {
             try {
-                val streamUrl = withContext(Dispatchers.IO) {
-                    InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
+                val streamUrl = withTimeout(20_000L) {
+                    withContext(Dispatchers.IO) {
+                        InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
+                    }
                 }
                 if (loadedYoutubeVideoId != videoId) return@launch // stale, user ne dusra gaana chala diya
                 runOnController { controller ->
@@ -448,7 +461,10 @@ class MusicPlayer(
                 Log.e("MusicPlayer", "Stream resolve retry failed for $videoId, giving up on this track", e)
                 if (loadedYoutubeVideoId != videoId) return@launch
                 // TEMP DEBUG: show the real exception on-screen (phone-only debugging, no adb).
-                _playbackError.value = "Stream fail: ${e.javaClass.simpleName}: ${e.message}"
+                val label = if (e is TimeoutCancellationException) "Stream resolve TIMED OUT (hung >20s)" else "Stream fail"
+                val msg = "$label: ${e.javaClass.simpleName}: ${e.message}"
+                _playbackError.value = msg
+                _lastStreamErrorDebug.value = "[retry] $msg (track=${track.title})"
                 registerPlaybackFailureAndMaybeStop()
             }
         }
@@ -852,8 +868,16 @@ class MusicPlayer(
         val preloadedUrl = preloadedStreamUrls.remove(videoId)
         scope.launch {
             try {
-                val streamUrl = preloadedUrl ?: withContext(Dispatchers.IO) {
-                    InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
+                // TIMEOUT FIX: resolveStreamUrl() (cipher deobfuscation + PoToken + multi-client
+                // fallback) had no overall deadline - if it got stuck internally (WebView hang,
+                // a network call with no read timeout, etc.) the spinner span forever with no
+                // error, because startBufferingWatchdog() only guards AFTER a URL is obtained.
+                // withTimeout guarantees this always either succeeds or throws within 20s, so the
+                // existing catch block below (retry-once, then show _playbackError) always runs.
+                val streamUrl = preloadedUrl ?: withTimeout(20_000L) {
+                    withContext(Dispatchers.IO) {
+                        InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
+                    }
                 }
                 if (loadedYoutubeVideoId != videoId) return@launch // stale, user ne dusra gaana chala diya
                 runOnController { controller ->
@@ -885,6 +909,8 @@ class MusicPlayer(
                 startBufferingWatchdog(videoId)
             } catch (e: Exception) {
                 Log.e("MusicPlayer", "Stream resolve failed for $videoId, retrying once", e)
+                val firstLabel = if (e is TimeoutCancellationException) "Stream resolve TIMED OUT (hung >20s)" else "Stream fail"
+                _lastStreamErrorDebug.value = "[1st try] $firstLabel: ${e.javaClass.simpleName}: ${e.message} (track=${track.title})"
                 if (loadedYoutubeVideoId != videoId) return@launch
                 if (relayRetriedForVideoId != videoId) {
                     relayRetriedForVideoId = videoId
@@ -892,7 +918,8 @@ class MusicPlayer(
                 } else {
                     // TEMP DEBUG: include the real exception so it's visible on-screen
                     // (via the Snackbar in MainActivity) without needing adb/logcat.
-                    _playbackError.value = "Stream fail: ${e.javaClass.simpleName}: ${e.message}"
+                    val label = if (e is TimeoutCancellationException) "Stream resolve TIMED OUT (hung >20s)" else "Stream fail"
+                    _playbackError.value = "$label: ${e.javaClass.simpleName}: ${e.message}"
                     registerPlaybackFailureAndMaybeStop()
                 }
             }
