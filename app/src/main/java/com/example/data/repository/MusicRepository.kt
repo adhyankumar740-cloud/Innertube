@@ -12,7 +12,6 @@ import com.example.data.database.SearchHistoryEntity
 import com.example.data.model.Lyrics
 import com.example.data.model.Track
 import com.example.data.model.parseSyncedLyrics
-import com.example.data.model.toTrack
 import com.example.data.network.ITunesService
 import com.example.data.network.InnerTubeMusicService
 import com.example.data.network.LrcLibService
