@@ -82,6 +82,33 @@ object YouTubeSession {
         _isLoggedIn.value = true
     }
 
+    /**
+     * Guest/not-logged-in devices never had [YouTube.visitorData] set (it was only ever
+     * populated by [save], which only runs after a real YT Music login). Without it,
+     * [com.example.data.youtube.YTPlayerUtils] can't request a PoToken for any client
+     * (WEB_REMIX or the ANDROID_VR/etc. fallbacks), and every one of them gets rejected
+     * with "Sign in to confirm you're not a bot".
+     *
+     * Fetches an anonymous visitorData (same one music.youtube.com hands out to a guest
+     * browser tab) and applies it in-memory so unauthenticated playback has a session to
+     * attach a PoToken to. Does nothing if a visitorData is already set (logged-in session
+     * from [restore], or an earlier call to this function). Not persisted to disk - guests
+     * get a fresh one each app start, which matches how YouTube treats anonymous visitors.
+     *
+     * Safe/cheap to call every app start; call it right after [restore] and before any
+     * playback-triggering InnerTube call.
+     */
+    suspend fun ensureVisitorData() {
+        if (YouTube.visitorData != null) return
+        YouTube.visitorData()
+            .onSuccess { data ->
+                YouTube.visitorData = data
+                Timber.tag(TAG).d("Fetched anonymous visitorData for guest session")
+            }.onFailure {
+                Timber.tag(TAG).e(it, "Failed to fetch anonymous visitorData; guest playback may fail bot checks")
+            }
+    }
+
     /** Signs out: clears the saved session and the in-memory [YouTube] state. */
     fun logout() {
         prefs.edit().clear().apply()
