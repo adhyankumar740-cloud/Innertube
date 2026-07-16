@@ -42,6 +42,17 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import timber.log.Timber
 
+/**
+ * Lightweight, dependency-free exception reporter.
+ *
+ * There's no crash-reporting SDK (e.g. Crashlytics) wired into this project, so this just
+ * routes to Timber for now. If/when a crash reporter is added, swap the body here without
+ * touching call sites.
+ */
+fun reportException(throwable: Throwable) {
+    Timber.tag("YTPlayerUtils").e(throwable, "Reported exception")
+}
+
 object YTPlayerUtils {
     private const val logTag = "YTPlayerUtils"
     private const val TAG = "YTPlayerUtils"
