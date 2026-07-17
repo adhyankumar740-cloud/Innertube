@@ -62,8 +62,8 @@ class AppContainer(private val context: Context) {
         )
     }
 
-    // Reads announcement/update popups pushed from the web Admin Panel
-    // (public/admin/index.html) via Firebase Realtime Database.
+    // Reads announcement/update popups published from the in-app Admin
+    // screen (Settings -> Admin), backed by Supabase (table `announcements`).
     val announcementManager: AnnouncementManager by lazy {
         AnnouncementManager(context)
     }
@@ -72,16 +72,17 @@ class AppContainer(private val context: Context) {
     // SUPABASE_URL/SUPABASE_ANON_KEY in local.properties + the schema in
     // supabase/schema.sql - see SETUP_GUIDE.md section 6.
     val jamManager: JamManager by lazy {
-        JamManager()
+        JamManager(context)
     }
 
     val jamChatManager: JamChatManager by lazy {
         JamChatManager()
     }
 
-    // Backs playlists up to Firebase Realtime Database, keyed by the logged-in
-    // account's email, so "delete the app -> log back in" restores them - see
-    // PlaylistCloudSync's own doc comment for how the restore merge works.
+    // Backs playlists up to Supabase (table `playlist_backups`), keyed by the
+    // logged-in account's email, so "delete the app -> log back in" restores
+    // them - see PlaylistCloudSync's own doc comment for how the restore
+    // merge works.
     val playlistCloudSync: PlaylistCloudSync by lazy {
         PlaylistCloudSync()
     }
