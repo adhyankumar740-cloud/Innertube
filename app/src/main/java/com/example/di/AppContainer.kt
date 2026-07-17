@@ -68,8 +68,9 @@ class AppContainer(private val context: Context) {
         AnnouncementManager(context)
     }
 
-    // Real cross-device Jam (Firebase Realtime Database). Requires a Firebase
-    // project + google-services.json - see SETUP_GUIDE.md.
+    // Real cross-device Jam (Supabase Postgrest + Realtime). Requires
+    // SUPABASE_URL/SUPABASE_ANON_KEY in local.properties + the schema in
+    // supabase/schema.sql - see SETUP_GUIDE.md section 6.
     val jamManager: JamManager by lazy {
         JamManager()
     }
