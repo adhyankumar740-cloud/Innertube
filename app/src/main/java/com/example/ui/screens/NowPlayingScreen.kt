@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -149,12 +150,14 @@ fun NowPlayingScreen(
                 .fillMaxSize()
                 .padding(horizontal = 24.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
+            // Small top gap only - the artwork itself now carries the visual
+            // weight (bigger, less side padding) instead of extra top spacing,
+            // and the extra room saved here goes to pushing the seek bar and
+            // transport controls further down via the weighted spacer below.
+            Spacer(modifier = Modifier.height(4.dp))
 
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 AsyncImage(
                     model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.PLAYER),
@@ -163,12 +166,16 @@ fun NowPlayingScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(24.dp))
+                        .clip(RoundedCornerShape(28.dp))
                         .background(MaterialTheme.colorScheme.surface)
                 )
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            // Flexible gap between artwork/title and the seek bar - grows to
+            // fill the screen's free vertical space, which is what actually
+            // shifts the seekbar + play/pause row further down the screen
+            // rather than sitting right under the title.
+            Spacer(modifier = Modifier.weight(1f, fill = true).heightIn(min = 20.dp))
 
             Text(
                 text = track.title,
