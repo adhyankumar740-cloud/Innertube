@@ -525,6 +525,11 @@ fun MainAppLayout(
                         repeatMode = musicViewModel.player.repeatMode.collectAsState().value,
                         lyrics = musicViewModel.lyrics.collectAsState().value,
                         isLoadingLyrics = musicViewModel.isLoadingLyrics.collectAsState().value,
+                        sleepTimerEndsAt = musicViewModel.player.sleepTimerEndsAt.collectAsState().value,
+                        onSleepTimerSet = { minutes -> musicViewModel.player.setSleepTimer(minutes) },
+                        onSleepTimerCancel = { musicViewModel.player.cancelSleepTimer() },
+                        playbackSpeed = musicViewModel.player.playbackSpeed.collectAsState().value,
+                        onPlaybackSpeedSet = { speed -> musicViewModel.player.setPlaybackSpeed(speed) },
                         onPlayPauseClick = {
                             if (isPlaying) musicViewModel.player.pause() else musicViewModel.player.resume()
                         },
