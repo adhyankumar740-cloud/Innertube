@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
@@ -56,6 +55,7 @@ import com.example.data.model.Track
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.MusicViewModel
 import com.example.ui.viewmodel.PlaylistViewModel
+import com.example.util.ThumbnailUtils
 import java.util.Calendar
 
 // BUG FIX: this was a hardcoded "Good Evening," string, so the header always
@@ -245,10 +245,10 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         // Clean, uncluttered rows: just artwork, title/artist, and
-                        // tap to play. Favorite/download/add-to-playlist controls
-                        // stay on the Search screen where the user is actively
-                        // picking a specific track, instead of crowding every
-                        // recommendation on Home.
+                        // tap to play. Favorite/add-to-playlist controls stay on
+                        // the Search screen where the user is actively picking a
+                        // specific track, instead of crowding every recommendation
+                        // on Home.
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -281,7 +281,7 @@ fun TrackCardCompact(
             .clickable { onPlayClick() }
     ) {
         AsyncImage(
-            model = track.artworkUrl,
+            model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.CARD),
             contentDescription = "${track.title} artwork",
             contentScale = ContentScale.Crop,
             modifier = Modifier
@@ -312,7 +312,6 @@ fun TrackRow(
     track: Track,
     onPlayClick: () -> Unit,
     onFavoriteClick: (() -> Unit)? = null,
-    onDownloadClick: (() -> Unit)? = null,
     onAddToPlaylistClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -332,7 +331,7 @@ fun TrackRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             AsyncImage(
-                model = track.artworkUrl,
+                model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.LIST_ROW),
                 contentDescription = "${track.title} artwork",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -361,7 +360,7 @@ fun TrackRow(
             }
 
             // Add-to-playlist control - only shown when the caller wires it up
-            // (Home/Search rows do; Library's Favorites/Downloads rows don't).
+            // (Home/Search rows do; Library's Favorites/Playlists rows don't).
             if (onAddToPlaylistClick != null) {
                 IconButton(onClick = onAddToPlaylistClick) {
                     Icon(
@@ -372,24 +371,14 @@ fun TrackRow(
                 }
             }
 
-            // Favorites & Download controls - only shown when the caller wires
-            // them up (Search does; Home's Recommended rows keep it minimal).
+            // Favorite control - only shown when the caller wires it up
+            // (Search does; Home's Recommended rows keep it minimal).
             if (onFavoriteClick != null) {
                 IconButton(onClick = onFavoriteClick) {
                     Icon(
                         imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite icon",
                         tint = if (track.isFavorite) MaterialTheme.colorScheme.tertiary else Color.Gray
-                    )
-                }
-            }
-
-            if (onDownloadClick != null) {
-                IconButton(onClick = onDownloadClick) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "Download icon",
-                        tint = if (track.isDownloaded) MaterialTheme.colorScheme.primary else Color.Gray
                     )
                 }
             }
@@ -426,7 +415,7 @@ fun BottomPlayerTray(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AsyncImage(
-                    model = track.artworkUrl,
+                    model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.LIST_ROW),
                     contentDescription = "${track.title} art",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
