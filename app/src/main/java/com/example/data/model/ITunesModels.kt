@@ -47,7 +47,6 @@ data class Track(
     val artworkUrl: String,
     val durationMs: Long,
     val genre: String,
-    val isDownloaded: Boolean = false,
     val isFavorite: Boolean = false,
     // Source-awareness added for YouTube full-song playback + iTunes video Samples:
     val source: TrackSource = TrackSource.ITUNES,
