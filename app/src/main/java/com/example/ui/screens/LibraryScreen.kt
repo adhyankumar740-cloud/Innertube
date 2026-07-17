@@ -18,10 +18,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,6 +41,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.Track
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.MusicViewModel
 import com.example.ui.viewmodel.PlaylistViewModel
@@ -56,9 +56,9 @@ fun LibraryScreen(
     val username by authViewModel.username.collectAsState()
     val email by authViewModel.email.collectAsState()
     val favorites by musicViewModel.favoriteTracks.collectAsState()
-    val downloads by musicViewModel.downloadedTracks.collectAsState()
 
     var activeTab by remember { mutableStateOf("Favorites") }
+    var trackPendingPlaylistAdd by remember { mutableStateOf<Track?>(null) }
 
     Box(
         modifier = modifier
@@ -127,12 +127,12 @@ fun LibraryScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Library Selector Tabs
+            // Library Selector Tabs - Favorites & Playlists
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                listOf("Favorites", "Downloads", "Playlists").forEach { tab ->
+                listOf("Favorites", "Playlists").forEach { tab ->
                     val isSelected = tab == activeTab
                     Box(
                         modifier = Modifier
@@ -147,22 +147,14 @@ fun LibraryScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = when (tab) {
-                                    "Favorites" -> Icons.Default.Favorite
-                                    "Downloads" -> Icons.Default.DownloadDone
-                                    else -> Icons.Default.QueueMusic
-                                },
+                                imageVector = if (tab == "Favorites") Icons.Default.Favorite else Icons.Default.QueueMusic,
                                 contentDescription = "$tab Tab Icon",
                                 tint = if (isSelected) Color.Black else Color.Gray,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = when (tab) {
-                                    "Favorites" -> "Favorites (${favorites.size})"
-                                    "Downloads" -> "Downloads (${downloads.size})"
-                                    else -> "Playlists"
-                                },
+                                text = if (tab == "Favorites") "Favorites (${favorites.size})" else "Playlists",
                                 color = if (isSelected) Color.Black else Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
@@ -181,9 +173,7 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 )
             } else {
-                val currentList = if (activeTab == "Favorites") favorites else downloads
-
-                if (currentList.isEmpty()) {
+                if (favorites.isEmpty()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -192,20 +182,20 @@ fun LibraryScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
-                                imageVector = if (activeTab == "Favorites") Icons.Default.Favorite else Icons.Default.MusicNote,
-                                contentDescription = "Empty list icon",
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Empty favorites icon",
                                 tint = Color.DarkGray,
                                 modifier = Modifier.size(64.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "No songs found in $activeTab",
+                                text = "No favorites yet",
                                 color = Color.Gray,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Mark songs as favorite or download on Home",
+                                text = "Tap the heart on any song to save it here",
                                 color = Color.DarkGray,
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = 4.dp)
@@ -213,23 +203,53 @@ fun LibraryScreen(
                         }
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(currentList) { track ->
-                            TrackRow(
-                                track = track,
-                                onPlayClick = { musicViewModel.playTrack(track, currentList) },
-                                onFavoriteClick = { musicViewModel.toggleFavorite(track) },
-                                onDownloadClick = { musicViewModel.toggleDownload(track) }
+                    Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        Button(
+                            onClick = {
+                                favorites.firstOrNull()?.let { musicViewModel.playTrack(it, favorites) }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(18.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(text = "Play All", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(favorites) { track ->
+                                TrackRow(
+                                    track = track,
+                                    onPlayClick = { musicViewModel.playTrack(track, favorites) },
+                                    onFavoriteClick = { musicViewModel.toggleFavorite(track) },
+                                    onAddToPlaylistClick = { trackPendingPlaylistAdd = track }
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+
+        trackPendingPlaylistAdd?.let { track ->
+            AddToPlaylistDialog(
+                track = track,
+                playlistViewModel = playlistViewModel,
+                onDismiss = { trackPendingPlaylistAdd = null }
+            )
         }
     }
 }
