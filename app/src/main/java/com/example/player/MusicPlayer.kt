@@ -22,6 +22,7 @@ import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -282,7 +283,20 @@ class MusicPlayer(
     private var activeCacheWriter: CacheWriter? = null
 
     private var progressJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    // BACKGROUND-PLAYBACK FIX: this was `CoroutineScope(Dispatchers.Main + Job())`.
+    // A plain Job() propagates any *uncaught* exception from one child coroutine
+    // by cancelling the whole scope's Job - permanently. triggerAutoplay() (the
+    // code path that finds and starts the NEXT track when a song ends) launches
+    // on this same `scope`, and does real network I/O (relay resolve, autoplay
+    // recommendation lookup) that's far more likely to throw while the app is
+    // minimized/Doze-restricted. The first time that happened anywhere on this
+    // scope, every *subsequent* scope.launch{} call (including every future
+    // "song ended, play the next one" and the progress-position ticker) became
+    // a silent no-op for the rest of the process's life - looking exactly like
+    // "playback just stops advancing once the app is minimized, only works
+    // again after force-closing and reopening". SupervisorJob() makes a failure
+    // in one child fail only that child, never the shared scope.
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // TRACK-TRANSITION WAKE-LOCK FIX (root cause of "song ends while minimized,
     // next song only plays after reopening the app"): ExoPlayer's own
@@ -481,6 +495,24 @@ class MusicPlayer(
         }
     }
 
+    // NOTIFICATION-ARTWORK FIX: none of the three MediaMetadata builders below
+    // ever called .setArtworkUri() - only title/artist were set. Media3's
+    // MediaSessionService builds the system media notification (and lock
+    // screen / Bluetooth / Android Auto artwork) directly from this
+    // MediaMetadata, so every notification showed just the generic app icon
+    // with no album art, no matter what was playing. One shared helper so all
+    // three playback paths (relay retry, iTunes preview, YouTube relay) build
+    // metadata the same, correct way.
+    private fun buildMediaMetadata(track: Track): MediaMetadata {
+        val builder = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.artist ?: "Unknown Artist")
+        if (!track.artworkUrl.isNullOrBlank()) {
+            builder.setArtworkUri(Uri.parse(track.artworkUrl))
+        }
+        return builder.build()
+    }
+
     private fun retryRelayResolve(track: Track, videoId: String, catchUp: RemoteCatchUp?, autoPlay: Boolean = true) {
         scope.launch {
             try {
@@ -491,10 +523,7 @@ class MusicPlayer(
                 }
                 if (loadedYoutubeVideoId != videoId) return@launch // stale, user ne dusra gaana chala diya
                 runOnController { controller ->
-                    val metadata = MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist ?: "Unknown Artist")
-                        .build()
+                    val metadata = buildMediaMetadata(track)
 
                     val mediaItem = MediaItem.Builder()
                         .setUri(streamUrl)
@@ -863,10 +892,7 @@ class MusicPlayer(
         pendingCatchUp = null
 
         runOnController { controller ->
-            val metadata = MediaMetadata.Builder()
-                .setTitle(track.title)
-                .setArtist(track.artist ?: "Unknown Artist")
-                .build()
+            val metadata = buildMediaMetadata(track)
 
             val mediaItem = MediaItem.Builder()
                 .setUri(track.previewUrl)
@@ -933,10 +959,7 @@ class MusicPlayer(
                 }
                 if (loadedYoutubeVideoId != videoId) return@launch // stale, user ne dusra gaana chala diya
                 runOnController { controller ->
-                    val metadata = MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist ?: "Unknown Artist")
-                        .build()
+                    val metadata = buildMediaMetadata(track)
 
                     val mediaItem = MediaItem.Builder()
                         .setUri(streamUrl)
