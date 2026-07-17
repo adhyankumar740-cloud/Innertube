@@ -76,6 +76,12 @@ data class SearchHistoryEntity(
  * *resolved* genre (never the YouTube-default "Music" placeholder) so genre
  * affinity can be computed directly with SQL GROUP BY instead of re-resolving
  * genres for every history row on every read.
+ *
+ * Also carries a full track snapshot (album/preview/artwork/etc, same idea as
+ * [PlaylistTrackEntity]) so the "Keep Listening" row on Home can render and
+ * replay a track directly from history without an extra DB join or network
+ * call - added fields default to "" / null / false so this stays additive
+ * for any pre-existing rows (harmless with fallbackToDestructiveMigration).
  */
 @Entity(tableName = "play_history")
 data class PlayHistoryEntity(
@@ -84,8 +90,45 @@ data class PlayHistoryEntity(
     val title: String,
     val artist: String,
     val genre: String,
-    val timestamp: Long = System.currentTimeMillis()
-)
+    val timestamp: Long = System.currentTimeMillis(),
+    val album: String = "",
+    val previewUrl: String = "",
+    val artworkUrl: String = "",
+    val durationMs: Long = 0,
+    val source: String = "ITUNES",
+    val youtubeVideoId: String? = null,
+    val isVideo: Boolean = false
+) {
+    fun toTrack(): Track = Track(
+        id = trackId,
+        title = title,
+        artist = artist,
+        album = album,
+        previewUrl = previewUrl,
+        artworkUrl = artworkUrl,
+        durationMs = durationMs,
+        genre = genre,
+        source = if (source == "YOUTUBE") TrackSource.YOUTUBE else TrackSource.ITUNES,
+        youtubeVideoId = youtubeVideoId,
+        isVideo = isVideo
+    )
+
+    companion object {
+        fun fromTrack(track: Track, genre: String) = PlayHistoryEntity(
+            trackId = track.id,
+            title = track.title,
+            artist = track.artist,
+            genre = genre,
+            album = track.album,
+            previewUrl = track.previewUrl,
+            artworkUrl = track.artworkUrl,
+            durationMs = track.durationMs,
+            source = track.source.name,
+            youtubeVideoId = track.youtubeVideoId,
+            isVideo = track.isVideo
+        )
+    }
+}
 
 /**
  * A user-created playlist. Tracks live in [PlaylistTrackEntity], keyed by
