@@ -4,42 +4,43 @@ import com.example.data.model.Track
 import com.example.data.model.TrackSource
 import com.example.data.repository.MusicRepository
 import com.example.data.repository.Playlist
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.FirebaseDatabase
+import com.example.jam.SupabaseClient
+import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
 /**
- * Backs playlists up to Firebase Realtime Database and restores them on a
- * fresh install / a different device, keyed by the user's email (from Google
- * Sign-In - see AuthViewModel). This is what makes "delete the app -> log
- * back in" bring playlists back instead of losing them: deleting/uninstalling
- * the app wipes the local Room database, but the cloud copy survives and is
- * merged back in the next time the same Google account logs in.
+ * Backs playlists up to **Supabase** (table `playlist_backups` - see
+ * `supabase/schema.sql`), keyed by the user's email (from Google Sign-In -
+ * see AuthViewModel), and restores them on a fresh install / a different
+ * device. This is what makes "delete the app -> log back in" bring
+ * playlists back instead of losing them: deleting/uninstalling the app
+ * wipes the local Room database, but the cloud copy survives and is merged
+ * back in the next time the same Google account logs in.
  *
  * Deliberately NOT wired up for Guest sessions - a guest has no stable
  * identity to key a backup by, so guest playlists stay local-only, exactly
  * like every other kind of data in this app already behaves for guests.
  *
- * Uses the same silent Firebase Anonymous Auth as JamManager, purely to
- * satisfy the Realtime Database's "auth != null" security rule - this has
- * nothing to do with *which* Google account is logged into the app itself.
- * Actual per-user separation of data comes from keying every path below by
- * the user's (sanitized) email, the same "shared node, path is the access
- * control" pattern this app already uses for Jam room codes.
+ * This app has no real Supabase Auth session (login is native Google
+ * Sign-In only, see AuthViewModel.kt), so requests hit `playlist_backups`
+ * as the `anon` role under permissive RLS - the same trust model already
+ * used for the Jam and announcements tables. The email column is what
+ * actually scopes a user to their own rows; tighten this later if you add
+ * real Supabase Auth.
  *
- * Data shape in Firebase:
- *   playlist_backups/{sanitizedEmail}/{remoteId}/name
- *   playlist_backups/{sanitizedEmail}/{remoteId}/createdAt
- *   playlist_backups/{sanitizedEmail}/{remoteId}/tracks/{trackId}/...fields...
+ * Data shape in Supabase (one row per playlist):
+ *   playlist_backups.email       - owning account's email
+ *   playlist_backups.remote_id   - stable cross-device playlist id
+ *   playlist_backups.name
+ *   playlist_backups.created_at
+ *   playlist_backups.tracks      - jsonb array, the playlist's full track list
  */
 class PlaylistCloudSync {
-
-    private val auth = FirebaseAuth.getInstance()
-    private val db = FirebaseDatabase.getInstance().reference.child("playlist_backups")
 
     // Guards against re-running the restore merge more than once per login
     // per process - e.g. if the composable driving it recomposes a few times
@@ -47,14 +48,59 @@ class PlaylistCloudSync {
     // cold app start is cheap and self-healing if a previous sync failed.
     private val restoredForEmail = mutableSetOf<String>()
 
-    private suspend fun ensureSignedIn() {
-        if (auth.currentUser == null) {
-            auth.signInAnonymously().await()
-        }
-    }
+    @Serializable
+    private data class TrackRow(
+        val id: Long,
+        val title: String,
+        val artist: String,
+        val album: String,
+        @SerialName("preview_url") val previewUrl: String,
+        @SerialName("artwork_url") val artworkUrl: String,
+        @SerialName("duration_ms") val durationMs: Long,
+        val genre: String,
+        val source: String,
+        @SerialName("youtube_video_id") val youtubeVideoId: String? = null,
+        @SerialName("is_video") val isVideo: Boolean = false
+    )
 
-    /** Firebase Realtime Database keys can't contain '.', '#', '$', '[', ']'. */
-    private fun sanitize(email: String): String = email.replace(Regex("[.#$\\[\\]]"), "_")
+    @Serializable
+    private data class PlaylistBackupRow(
+        val email: String,
+        @SerialName("remote_id") val remoteId: String,
+        val name: String,
+        @SerialName("created_at") val createdAt: Long,
+        val tracks: List<TrackRow> = emptyList()
+    )
+
+    private fun Track.toRow(): TrackRow = TrackRow(
+        id = id,
+        title = title,
+        artist = artist,
+        album = album,
+        previewUrl = previewUrl,
+        artworkUrl = artworkUrl,
+        durationMs = durationMs,
+        genre = genre,
+        source = source.name,
+        youtubeVideoId = youtubeVideoId,
+        isVideo = isVideo
+    )
+
+    private fun TrackRow.toTrack(): Track = Track(
+        id = id,
+        title = title,
+        artist = artist,
+        album = album,
+        previewUrl = previewUrl,
+        artworkUrl = artworkUrl,
+        durationMs = durationMs,
+        genre = genre,
+        source = if (source == "YOUTUBE") TrackSource.YOUTUBE else TrackSource.ITUNES,
+        youtubeVideoId = youtubeVideoId,
+        isVideo = isVideo
+    )
+
+    private val table get() = SupabaseClient.client.postgrest["playlist_backups"]
 
     /**
      * Call once right after login (and again whenever the app cold-starts
@@ -73,33 +119,32 @@ class PlaylistCloudSync {
         if (!restoredForEmail.add(email)) return
 
         try {
-            ensureSignedIn()
-            val userRef = db.child(sanitize(email))
-            val snapshot = userRef.get().await()
-
-            val cloudPlaylists = snapshot.children.mapNotNull { child ->
-                val remoteId = child.key ?: return@mapNotNull null
-                val name = child.child("name").getValue(String::class.java) ?: return@mapNotNull null
-                val createdAt = child.child("createdAt").getValue(Long::class.java) ?: System.currentTimeMillis()
-                val tracks = child.child("tracks").children.mapNotNull { it.toTrackOrNull() }
-                CloudPlaylist(remoteId, name, createdAt, tracks)
-            }
+            val cloudRows = table
+                .select(columns = Columns.ALL) {
+                    filter { eq("email", email) }
+                }
+                .decodeList<PlaylistBackupRow>()
 
             val localSnapshot = repository.getPlaylistsSnapshot()
             val localRemoteIds = localSnapshot.map { it.first.remoteId }.toSet()
 
             // Pull down whatever the cloud has that this install doesn't.
-            for (cp in cloudPlaylists) {
-                if (cp.remoteId !in localRemoteIds) {
-                    repository.restorePlaylistFromCloud(cp.remoteId, cp.name, cp.createdAt, cp.tracks)
+            for (row in cloudRows) {
+                if (row.remoteId !in localRemoteIds) {
+                    repository.restorePlaylistFromCloud(
+                        remoteId = row.remoteId,
+                        name = row.name,
+                        createdAt = row.createdAt,
+                        tracks = row.tracks.map { it.toTrack() }
+                    )
                 }
             }
 
             // Push up whatever this install has that the cloud doesn't yet.
-            val cloudRemoteIds = cloudPlaylists.map { it.remoteId }.toSet()
+            val cloudRemoteIds = cloudRows.map { it.remoteId }.toSet()
             for ((playlist, tracks) in localSnapshot) {
                 if (playlist.remoteId !in cloudRemoteIds) {
-                    uploadPlaylistBlocking(email, playlist, tracks)
+                    upsertPlaylist(email, playlist, tracks)
                 }
             }
         } catch (e: Exception) {
@@ -108,34 +153,37 @@ class PlaylistCloudSync {
         }
     }
 
-    /** Uploads (or overwrites) one playlist's full metadata + track list in one shot. */
-    private suspend fun uploadPlaylistBlocking(email: String, playlist: Playlist, tracks: List<Track>) {
-        val playlistRef = db.child(sanitize(email)).child(playlist.remoteId)
-        val tracksMap = tracks.associate { it.id.toString() to it.toFieldMap() }
-        playlistRef.updateChildren(
-            mapOf(
-                "name" to playlist.name,
-                "createdAt" to playlist.createdAt,
-                "tracks" to tracksMap
+    /** Inserts or fully overwrites one playlist's metadata + track list in one shot. */
+    private suspend fun upsertPlaylist(email: String, playlist: Playlist, tracks: List<Track>) {
+        table.upsert(
+            PlaylistBackupRow(
+                email = email,
+                remoteId = playlist.remoteId,
+                name = playlist.name,
+                createdAt = playlist.createdAt,
+                tracks = tracks.map { it.toRow() }
             )
-        ).await()
+        ) {
+            onConflict = "email,remote_id"
+        }
     }
 
     /** Fire-and-forget upload - call after creating a playlist or finishing an import. */
     fun uploadPlaylist(email: String, playlist: Playlist, tracks: List<Track>) {
         if (email.isBlank()) return
-        pushAsync {
-            ensureSignedIn()
-            uploadPlaylistBlocking(email, playlist, tracks)
-        }
+        pushAsync { upsertPlaylist(email, playlist, tracks) }
     }
 
     /** Fire-and-forget rename - call after [MusicRepository.renamePlaylist]. */
     fun renamePlaylist(email: String, remoteId: String, newName: String) {
         if (email.isBlank()) return
         pushAsync {
-            ensureSignedIn()
-            db.child(sanitize(email)).child(remoteId).child("name").setValue(newName).await()
+            table.update(mapOf("name" to newName)) {
+                filter {
+                    eq("email", email)
+                    eq("remote_id", remoteId)
+                }
+            }
         }
     }
 
@@ -143,28 +191,49 @@ class PlaylistCloudSync {
     fun deletePlaylist(email: String, remoteId: String) {
         if (email.isBlank()) return
         pushAsync {
-            ensureSignedIn()
-            db.child(sanitize(email)).child(remoteId).removeValue().await()
+            table.delete {
+                filter {
+                    eq("email", email)
+                    eq("remote_id", remoteId)
+                }
+            }
         }
     }
 
     /** Fire-and-forget track add - call after [MusicRepository.addTrackToPlaylist]. */
     fun addTrack(email: String, remoteId: String, track: Track) {
         if (email.isBlank()) return
-        pushAsync {
-            ensureSignedIn()
-            db.child(sanitize(email)).child(remoteId).child("tracks").child(track.id.toString())
-                .setValue(track.toFieldMap()).await()
-        }
+        pushAsync { mergeTracks(email, remoteId) { current -> current + track.toRow() } }
     }
 
     /** Fire-and-forget track remove - call after [MusicRepository.removeTrackFromPlaylist]. */
     fun removeTrack(email: String, remoteId: String, trackId: Long) {
         if (email.isBlank()) return
-        pushAsync {
-            ensureSignedIn()
-            db.child(sanitize(email)).child(remoteId).child("tracks").child(trackId.toString())
-                .removeValue().await()
+        pushAsync { mergeTracks(email, remoteId) { current -> current.filterNot { it.id == trackId } } }
+    }
+
+    /**
+     * Reads the row's current `tracks` array, applies [transform], and writes
+     * the result back - the jsonb-array equivalent of Firebase's old
+     * per-child add/remove, since Postgrest updates a jsonb column as a whole
+     * rather than one array element at a time.
+     */
+    private suspend fun mergeTracks(email: String, remoteId: String, transform: (List<TrackRow>) -> List<TrackRow>) {
+        val row = table
+            .select(columns = Columns.list("tracks")) {
+                filter {
+                    eq("email", email)
+                    eq("remote_id", remoteId)
+                }
+            }
+            .decodeSingleOrNull<Map<String, List<TrackRow>>>() ?: return
+
+        val updatedTracks = transform(row["tracks"] ?: emptyList())
+        table.update(mapOf("tracks" to updatedTracks)) {
+            filter {
+                eq("email", email)
+                eq("remote_id", remoteId)
+            }
         }
     }
 
@@ -182,42 +251,4 @@ class PlaylistCloudSync {
             }
         }
     }
-
-    private data class CloudPlaylist(
-        val remoteId: String,
-        val name: String,
-        val createdAt: Long,
-        val tracks: List<Track>
-    )
-
-    private fun DataSnapshot.toTrackOrNull(): Track? {
-        val trackId = key?.toLongOrNull() ?: return null
-        val title = child("title").getValue(String::class.java) ?: return null
-        return Track(
-            id = trackId,
-            title = title,
-            artist = child("artist").getValue(String::class.java) ?: "",
-            album = child("album").getValue(String::class.java) ?: "",
-            previewUrl = child("previewUrl").getValue(String::class.java) ?: "",
-            artworkUrl = child("artworkUrl").getValue(String::class.java) ?: "",
-            durationMs = child("durationMs").getValue(Long::class.java) ?: 0L,
-            genre = child("genre").getValue(String::class.java) ?: "",
-            source = if (child("source").getValue(String::class.java) == "YOUTUBE") TrackSource.YOUTUBE else TrackSource.ITUNES,
-            youtubeVideoId = child("youtubeVideoId").getValue(String::class.java),
-            isVideo = child("isVideo").getValue(Boolean::class.java) ?: false
-        )
-    }
-
-    private fun Track.toFieldMap(): Map<String, Any?> = mapOf(
-        "title" to title,
-        "artist" to artist,
-        "album" to album,
-        "previewUrl" to previewUrl,
-        "artworkUrl" to artworkUrl,
-        "durationMs" to durationMs,
-        "genre" to genre,
-        "source" to source.name,
-        "youtubeVideoId" to youtubeVideoId,
-        "isVideo" to isVideo
-    )
 }
