@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.io.IOException
@@ -134,9 +135,39 @@ class MusicRepository(
     /** Call whenever a track actually starts playing, to feed listening-history-based recommendations. */
     suspend fun recordTrackPlayed(track: Track) = withContext(Dispatchers.IO) {
         val genre = resolveGenre(track)
-        playHistoryDao.insertPlay(
-            PlayHistoryEntity(trackId = track.id, title = track.title, artist = track.artist, genre = genre)
-        )
+        playHistoryDao.insertPlay(PlayHistoryEntity.fromTrack(track, genre))
+    }
+
+    /**
+     * "Keep Listening" row (Home screen) - your most recently played tracks,
+     * one entry per track, newest first. Purely local, no network call.
+     */
+    fun getKeepListening(): Flow<List<Track>> =
+        playHistoryDao.getKeepListening(15).map { rows ->
+            rows.map { row ->
+                val track = row.toTrack()
+                val localEntity = savedTrackDao.getSavedTrackById(track.id)
+                track.copy(
+                    isDownloaded = localEntity?.isDownloaded ?: false,
+                    isFavorite = localEntity?.isFavorite ?: false
+                )
+            }
+        }.flowOn(Dispatchers.IO)
+
+    /**
+     * "Forgotten Favorites" row (Home screen) - tracks you favorited but
+     * haven't played in a while, so old favorites resurface instead of
+     * staying buried once your listening habits move on. A favorite counts
+     * as "forgotten" once it hasn't been played in [staleDays] days.
+     */
+    suspend fun getForgottenFavorites(staleDays: Int = 14, limit: Int = 15): List<Track> = withContext(Dispatchers.IO) {
+        val since = System.currentTimeMillis() - staleDays * 24L * 60L * 60L * 1000L
+        val recentlyPlayedIds = playHistoryDao.getRecentlyPlayedTrackIds(since).toSet()
+        savedTrackDao.getFavoriteTracks().first()
+            .filter { it.id !in recentlyPlayedIds }
+            .shuffled()
+            .take(limit)
+            .map { it.toTrack() }
     }
 
     /**
