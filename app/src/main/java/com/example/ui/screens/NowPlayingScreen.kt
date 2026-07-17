@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -39,6 +41,8 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -90,6 +94,11 @@ fun NowPlayingScreen(
     repeatMode: RepeatMode,
     lyrics: Lyrics?,
     isLoadingLyrics: Boolean,
+    sleepTimerEndsAt: Long?,
+    onSleepTimerSet: (minutes: Int) -> Unit,
+    onSleepTimerCancel: () -> Unit,
+    playbackSpeed: Float,
+    onPlaybackSpeedSet: (Float) -> Unit,
     onPlayPauseClick: () -> Unit,
     onPrevClick: () -> Unit,
     onNextClick: () -> Unit,
@@ -254,6 +263,62 @@ fun NowPlayingScreen(
             }
             IconButton(onClick = onAddToPlaylistClick) {
                 Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to Playlist", tint = Color.White, modifier = Modifier.size(24.dp))
+            }
+
+            var speedMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { speedMenuOpen = true }) {
+                    Icon(
+                        Icons.Default.Speed,
+                        contentDescription = "Playback speed",
+                        tint = if (playbackSpeed != 1.0f) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                    listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                        DropdownMenuItem(
+                            text = { Text(if (speed == 1.0f) "Normal" else "${speed}x") },
+                            onClick = {
+                                onPlaybackSpeedSet(speed)
+                                speedMenuOpen = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            var sleepMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { sleepMenuOpen = true }) {
+                    Icon(
+                        Icons.Default.Bedtime,
+                        contentDescription = "Sleep timer",
+                        tint = if (sleepTimerEndsAt != null) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                DropdownMenu(expanded = sleepMenuOpen, onDismissRequest = { sleepMenuOpen = false }) {
+                    if (sleepTimerEndsAt != null) {
+                        val minutesLeft = ((sleepTimerEndsAt - System.currentTimeMillis()) / 60_000L).coerceAtLeast(0)
+                        DropdownMenuItem(
+                            text = { Text("Cancel (${minutesLeft}m left)") },
+                            onClick = {
+                                onSleepTimerCancel()
+                                sleepMenuOpen = false
+                            }
+                        )
+                    }
+                    listOf(5, 15, 30, 45, 60).forEach { minutes ->
+                        DropdownMenuItem(
+                            text = { Text("$minutes minutes") },
+                            onClick = {
+                                onSleepTimerSet(minutes)
+                                sleepMenuOpen = false
+                            }
+                        )
+                    }
+                }
             }
         }
 
