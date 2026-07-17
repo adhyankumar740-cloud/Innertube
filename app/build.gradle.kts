@@ -1,4 +1,3 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.util.Properties
 
 plugins {
@@ -8,7 +7,6 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
 }
 
 // Supabase project credentials for the Jam feature (see SETUP_GUIDE.md section 6).
@@ -87,11 +85,6 @@ secrets {
   defaultPropertiesFileName = ".env.example"
 }
 
-googleServices {
-  missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN
-}
-
-
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
@@ -99,7 +92,6 @@ dependencies {
   implementation(libs.timber)
   coreLibraryDesugaring(libs.desugaring)
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -127,20 +119,10 @@ dependencies {
   implementation(libs.media3.common)
   implementation(libs.media3.database)
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
-  // firebase-database is kept for AnnouncementManager + PlaylistCloudSync (both
-  // still use Firebase Realtime Database). Jam itself no longer uses it - see
-  // com.example.jam.SupabaseClient / JamManager / JamChatManager, which now run
-  // on Supabase (Postgrest + Realtime) instead.
-  implementation(libs.firebase.database)
-  // firebase-auth is kept for: (1) Google Sign-In's underlying credential, and
-  // (2) JamManager's anonymous-sign-in fallback, which is ONLY used as a stable
-  // per-device identity (uid) for Jam - it has nothing to do with where Jam's
-  // room/chat data actually lives anymore (that's Supabase now).
-  implementation(libs.firebase.auth)
-  // Jam (group listening + chat) backend - Supabase Postgrest (room/message
-  // persistence) + Supabase Realtime (Broadcast for instant playback/chat sync,
-  // Presence for the live participant list). See SETUP_GUIDE.md section 6.
+  // Backend for everything: Jam (group listening + chat), announcements, and
+  // playlist cloud backup - Supabase Postgrest (persistence) + Supabase
+  // Realtime (Broadcast for instant playback/chat sync, Presence for the
+  // live participant list). See SETUP_GUIDE.md section 6.
   implementation(platform(libs.supabase.bom))
   implementation(libs.supabase.postgrest)
   implementation(libs.supabase.realtime)
@@ -149,7 +131,6 @@ dependencies {
   implementation(libs.ktor.client.content.negotiation)
   implementation(libs.ktor.serialization.json)
   implementation(libs.play.services.auth)
-  implementation(libs.firebase.appcheck.recaptcha)
   // Native "Sign in with Google" via Credential Manager - this is the
   // user-facing login now (see AuthViewModel.kt). No backend required.
   implementation(libs.androidx.credentials)
