@@ -298,7 +298,6 @@ fun SearchScreen(
                                 // MusicRepository.getAutoplayRecommendation.
                                 onPlayClick = { musicViewModel.playTrack(track, listOf(track)) },
                                 onFavoriteClick = { musicViewModel.toggleFavorite(track) },
-                                onDownloadClick = { musicViewModel.toggleDownload(track) },
                                 onAddToPlaylistClick = { trackPendingPlaylistAdd = track }
                             )
                         }
