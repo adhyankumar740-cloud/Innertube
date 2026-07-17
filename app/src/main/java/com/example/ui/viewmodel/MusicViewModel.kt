@@ -52,6 +52,12 @@ class MusicViewModel(
     private val _homeTracks = MutableStateFlow<List<Track>>(emptyList())
     val homeTracks = _homeTracks.asStateFlow()
 
+    // Home banner - today's #1 trending track from YouTube Music's real charts.
+    // Refreshed on load and again on a timer, so the banner keeps itself up to
+    // date with whatever's actually trending instead of staying static.
+    private val _trendingTrack = MutableStateFlow<Track?>(null)
+    val trendingTrack = _trendingTrack.asStateFlow()
+
     // Recent search queries (most recent first, deduped) - shown on the
     // Search screen below the search box whenever the query box is empty.
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
@@ -85,7 +91,18 @@ class MusicViewModel(
     init {
         // Load initial home screen content
         fetchHomeRecommendations()
+        fetchTrendingTrack()
         loadSearchHistory()
+
+        // Keep the trending banner honest: re-check the real chart every hour
+        // so it naturally moves to a new #1 through the day instead of
+        // staying frozen on whatever was trending when the app was opened.
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(60 * 60 * 1000L)
+                fetchTrendingTrack()
+            }
+        }
 
         // Autoplay: YouTube's relatedToVideoId was deprecated in 2023, so this is
         // an artist/genre-based approximation rather than a true "related videos" call.
@@ -171,6 +188,17 @@ class MusicViewModel(
 
     fun selectTab(tab: String) {
         _selectedTab.value = tab
+    }
+
+    fun fetchTrendingTrack() {
+        viewModelScope.launch {
+            val track = repository.getTrendingTrack()
+            if (track != null) {
+                _trendingTrack.value = track
+            }
+            // On failure, keep showing whatever the last successful fetch was
+            // (or nothing on very first launch) rather than clearing it.
+        }
     }
 
     fun fetchHomeRecommendations() {
