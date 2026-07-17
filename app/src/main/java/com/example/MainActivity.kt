@@ -78,7 +78,6 @@ import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SamplesScreen
 import com.example.ui.screens.SearchScreen
-import com.example.ui.screens.YouTubeLoginScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.JamViewModel
@@ -244,26 +243,6 @@ fun MainAppLayout(
     playlistViewModel: PlaylistViewModel,
     appContainer: AppContainer
 ) {
-    // Real YouTube Music login (separate from the "Sign in with Google" profile login above) -
-    // unlocks login-gated stream fallback clients (ANDROID_CREATOR, WEB_CREATOR, TVHTML5, ...).
-    // See YouTubeSession/YouTubeLoginScreen.
-    var showYouTubeLogin by remember { mutableStateOf(false) }
-    val isYouTubeLoggedIn by YouTubeSession.isLoggedIn.collectAsState()
-
-    if (showYouTubeLogin) {
-        val context = androidx.compose.ui.platform.LocalContext.current
-        YouTubeLoginScreen(
-            onClose = { showYouTubeLogin = false },
-            onLoginSuccess = {
-                val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                context.startActivity(intent)
-                Runtime.getRuntime().exit(0)
-            }
-        )
-        return
-    }
-
     val selectedTab by musicViewModel.selectedTab.collectAsState()
 
     // "Play Full Song" on the Samples feed starts playback in musicViewModel.player
@@ -292,28 +271,16 @@ fun MainAppLayout(
         musicViewModel.player.clearPlaybackError()
     }
 
-    // PHONE-ONLY DEBUG DIALOG: playbackError above gets reset to null the
-    // instant the *next* track starts trying (see MusicPlayer.playYoutubeTrack),
-    // so during an auto-skip cascade the real exception text was visible in
-    // the Snackbar for well under a second before being overwritten/dismissed
-    // - impossible to read or screenshot in time. lastStreamErrorDebug is never
-    // silently cleared, and this dialog stays up until manually dismissed, so
-    // the actual underlying exception can finally be read/screenshotted
-    // without adb/logcat/a computer. Remove this once the root cause is found.
-    val debugError by musicViewModel.player.lastStreamErrorDebug.collectAsState()
-    var dismissedDebugError by remember { mutableStateOf<String?>(null) }
-    if (debugError != null && debugError != dismissedDebugError) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { dismissedDebugError = debugError },
-            title = { androidx.compose.material3.Text("Playback debug error") },
-            text = { androidx.compose.material3.Text(debugError ?: "") },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { dismissedDebugError = debugError }) {
-                    androidx.compose.material3.Text("OK")
-                }
-            }
-        )
-    }
+    // REMOVED: there used to be a "phone-only debug dialog" here that popped
+    // up an AlertDialog every single time lastStreamErrorDebug changed - and
+    // MusicPlayer sets that on the *first* onPlayerError/resolve attempt too
+    // (see playYoutubeTrack/onPlayerError), even when the very next retry
+    // succeeds and the song plays perfectly fine. That's why an error popup
+    // was showing up on songs that actually played: a transient first
+    // attempt (expired signed URL, brief relay hiccup, etc.) is normal and
+    // gets silently retried - it was never meant to be user-facing. The real,
+    // user-facing failure signal is `playbackError` (Snackbar above), which
+    // only fires once retries are exhausted and playback actually gives up.
 
     // Admin Panel announcement/update popup (see public/admin/index.html),
     // checked once per app launch and shown at most once per day.
@@ -461,27 +428,6 @@ fun MainAppLayout(
                     .fillMaxSize()
                     .padding(bottom = if (reserveTrayGap) 72.dp else 0.dp)
             ) {
-                if (!isYouTubeLoggedIn) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showYouTubeLogin = true }
-                            .background(MaterialTheme.colorScheme.errorContainer)
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "Connect YouTube Music for more reliable playback",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Text(
-                            "Connect",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
                 Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                     when (selectedTab) {
                         "home" -> HomeScreen(
