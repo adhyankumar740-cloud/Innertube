@@ -26,9 +26,10 @@ data class JamUiState(
 )
 
 /**
- * Real cross-device Jam + live chat, backed by Firebase Realtime Database
- * (JamManager for playback sync, JamChatManager for messages/typing).
- * Replaces the previous single-device ChatRepository simulation.
+ * Real cross-device Jam + live chat, backed by Supabase (Postgrest + Realtime)
+ * - JamManager for playback sync + participants + typing, JamChatManager for
+ * messages/reactions. User identity (uid) still comes from Firebase Auth (see
+ * myUid below); only the Jam data layer itself moved to Supabase.
  */
 class JamViewModel(
     private val jamManager: JamManager,
@@ -93,7 +94,9 @@ class JamViewModel(
         jamChatManager.onMessageChanged = { msg ->
             _messages.value = _messages.value.map { if (it.id == msg.id) msg else it }
         }
-        jamChatManager.onTypingUsersChanged = { uids ->
+        // Typing indicator now rides on JamManager's Presence connection (see
+        // JamManager.setTyping doc comment) instead of a separate Firebase node.
+        jamManager.onTypingUsersChanged = { uids ->
             _typingUsers.value = uids - setOfNotNull(myUid)
         }
     }
@@ -110,7 +113,7 @@ class JamViewModel(
                     isPlaying = musicPlayer.isPlaying.value,
                     positionMs = musicPlayer.playbackPosition.value
                 )
-                jamChatManager.attach(code)
+                jamChatManager.attach(code, jamManager.realtimeChannel)
                 _uiState.value = JamUiState(roomCode = code, isHost = true, isInRoom = true)
                 startHeartbeat()
             } catch (e: Exception) {
@@ -126,7 +129,7 @@ class JamViewModel(
                 val joined = jamManager.joinRoom(code, displayName, avatar)
                 if (joined) {
                     val roomCode = jamManager.roomCode!!
-                    jamChatManager.attach(roomCode)
+                    jamChatManager.attach(roomCode, jamManager.realtimeChannel)
                     _uiState.value = JamUiState(roomCode = roomCode, isHost = false, isInRoom = true)
                     startHeartbeat()
                 } else {
@@ -202,8 +205,8 @@ class JamViewModel(
     }
 
     fun setUserTyping(isTyping: Boolean) {
-        val uid = myUid ?: return
-        jamChatManager.setTyping(uid, isTyping)
+        if (myUid == null) return
+        jamManager.setTyping(isTyping)
     }
 
     /** Host or any participant picks a track inside the Jam - broadcasts via MusicPlayer's onLocalSongChange hook. */
