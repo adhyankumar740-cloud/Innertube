@@ -9,7 +9,6 @@ import com.example.data.model.TrackSongBridge
 import com.example.jam.JamChatManager
 import com.example.jam.JamManager
 import com.example.player.MusicPlayer
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,10 +25,11 @@ data class JamUiState(
 )
 
 /**
- * Real cross-device Jam + live chat, backed by Supabase (Postgrest + Realtime)
- * - JamManager for playback sync + participants + typing, JamChatManager for
- * messages/reactions. User identity (uid) still comes from Firebase Auth (see
- * myUid below); only the Jam data layer itself moved to Supabase.
+ * Real cross-device Jam + live chat, backed entirely by Supabase (Postgrest +
+ * Realtime) - JamManager for playback sync + participants + typing,
+ * JamChatManager for messages/reactions. User identity (uid) is a stable
+ * local device id (see [com.example.data.local.DeviceIdentity] / myUid
+ * below) - there's no auth backend involved at all for Jam.
  */
 class JamViewModel(
     private val jamManager: JamManager,
@@ -59,7 +59,7 @@ class JamViewModel(
     // and small decoder/network timing differences would accumulate in between.
     private var heartbeatJob: Job? = null
 
-    val myUid: String? get() = FirebaseAuth.getInstance().currentUser?.uid
+    val myUid: String? get() = jamManager.localUid()
 
     init {
         jamManager.onParticipantsChanged = { list -> _participants.value = list }
