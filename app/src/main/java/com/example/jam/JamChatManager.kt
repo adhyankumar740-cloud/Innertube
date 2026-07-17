@@ -15,6 +15,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import java.time.Instant
 import java.util.UUID
 
@@ -72,7 +75,14 @@ class JamChatManager {
 
     companion object {
         private const val MESSAGES_TABLE = "jam_messages"
+        private val json = Json { ignoreUnknownKeys = true }
     }
+
+    /** Realtime's broadcast() takes a JsonObject, not an arbitrary
+     *  @Serializable instance - encode explicitly rather than relying on
+     *  overload resolution to do it for us. */
+    private inline fun <reified T> T.toJsonObject(): JsonObject =
+        json.encodeToJsonElement(this) as JsonObject
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var roomCode: String? = null
@@ -156,7 +166,7 @@ class JamChatManager {
                 // channel with `broadcast { self = true }`, so our own bubble
                 // renders through the same onMessageAdded path as everyone
                 // else's - no separate local-echo codepath to keep in sync).
-                ch.broadcast(event = "chat", message = row)
+                ch.broadcast(event = "chat", message = row.toJsonObject())
                 SupabaseClient.client.postgrest[MESSAGES_TABLE].insert(row)
             } catch (e: Exception) {
                 // Best-effort: if persistence fails the message still landed live.
@@ -182,7 +192,7 @@ class JamChatManager {
                 SupabaseClient.client.postgrest[MESSAGES_TABLE].update(ReactionsColumnUpdate(updatedReactions)) {
                     filter { eq("id", messageId) }
                 }
-                ch.broadcast(event = "reaction", message = current.copy(reactions = updatedReactions))
+                ch.broadcast(event = "reaction", message = current.copy(reactions = updatedReactions).toJsonObject())
             } catch (e: Exception) {
                 // Best-effort - the tap just silently doesn't register if this fails.
             }
