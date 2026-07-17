@@ -427,14 +427,14 @@ class JamManager {
         avatar: String,
         isHostFlag: Boolean,
     ) {
-        // self = true: broadcasts we send are also delivered back to us. Playback
-        // echo-suppression already handles this via senderUid (see
+        // receiveOwnBroadcasts = true: broadcasts we send are also delivered back to
+        // us. Playback echo-suppression already handles this via senderUid (see
         // handleIncomingPlayback); JamChatManager relies on it too, so a sent
         // chat message renders through the exact same onMessageAdded path for
         // every participant, including its own sender.
         val ch = SupabaseClient.client.channel("jam:$code") {
             broadcast {
-                self = true
+                receiveOwnBroadcasts = true
             }
         }
         channel = ch
