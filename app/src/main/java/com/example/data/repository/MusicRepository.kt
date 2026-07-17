@@ -318,6 +318,22 @@ class MusicRepository(
     }.flowOn(Dispatchers.IO)
 
     /**
+     * Real, auto-refreshing "what's trending right now" track for the Home
+     * banner - pulled from YouTube Music's own Trending chart (not a
+     * generic/hardcoded pick), enriched with the user's local favorite state
+     * like every other track in the app.
+     */
+    suspend fun getTrendingTrack(): Track? = withContext(Dispatchers.IO) {
+        try {
+            val track = InnerTubeMusicService.getTrendingTrack() ?: return@withContext null
+            val localEntity = savedTrackDao.getSavedTrackById(track.id)
+            track.copy(isFavorite = localEntity?.isFavorite ?: false)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * Home Search - queries YouTube Music's InnerTube API directly on-device
      * (see [InnerTubeMusicService]). No relay/proxy server and no API key
      * involved anymore.
