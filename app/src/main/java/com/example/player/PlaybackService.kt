@@ -1,6 +1,8 @@
 package com.example.player
 
+import android.app.PendingIntent
 import android.content.Intent
+import com.example.MainActivity
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -135,8 +137,25 @@ class PlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
 
+        // TAP-TO-OPEN FIX: without a session activity PendingIntent, the system
+        // media notification / lock-screen / quick-settings "control centre"
+        // widget has nothing to launch when the user taps its art or seek-bar
+        // area - so taps there silently did nothing. This tells the session
+        // what to open (the app, straight to Now Playing via MainActivity's
+        // existing single-top launch behaviour) whenever any part of that
+        // widget - other than the dedicated transport buttons - is tapped.
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         mediaSession = MediaSession.Builder(this, sessionPlayer(player))
             .setCallback(sessionCallback)
+            .setSessionActivity(contentIntent)
             .build()
     }
 
