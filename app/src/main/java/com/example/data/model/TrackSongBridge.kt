@@ -3,7 +3,7 @@ package com.example.data.model
 /**
  * Converts between [Track] (the app's playback model - relay/YouTube-sourced
  * for real songs today, iTunes previews still used for Samples) and [Song]
- * (the source-agnostic model JamManager syncs over Firebase).
+ * (the source-agnostic model JamManager syncs over Supabase).
  *
  * Kept as a single small bridge so source changes only need updating here -
  * JamManager and JamChatManager stay untouched.
