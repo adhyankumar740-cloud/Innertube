@@ -19,7 +19,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MusicNote
@@ -117,7 +116,6 @@ fun SamplesScreen(
                     isResolvingFullSong = isResolvingFullSong,
                     playerManager = samplesViewModel.playerManager,
                     onFavoriteClick = { samplesViewModel.toggleFavorite(track) },
-                    onDownloadClick = { samplesViewModel.toggleDownload(track) },
                     onPlayFullSongClick = { samplesViewModel.playFullSong(track) }
                 )
             }
@@ -238,7 +236,6 @@ fun SampleFeedCard(
     isResolvingFullSong: Boolean,
     playerManager: SamplesPlayerManager,
     onFavoriteClick: () -> Unit,
-    onDownloadClick: () -> Unit,
     onPlayFullSongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -417,21 +414,6 @@ fun SampleFeedCard(
                         imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Sample Favorite",
                         tint = if (track.isFavorite) MaterialTheme.colorScheme.tertiary else Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onDownloadClick,
-                    modifier = Modifier
-                        .size(50.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "Sample Download",
-                        tint = if (track.isDownloaded) MaterialTheme.colorScheme.primary else Color.White,
                         modifier = Modifier.size(24.dp)
                     )
                 }
