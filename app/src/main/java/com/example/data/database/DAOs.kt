@@ -65,6 +65,28 @@ interface PlayHistoryDao {
     @Query("SELECT * FROM play_history ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getRecentPlays(limit: Int = 50): List<PlayHistoryEntity>
 
+    // "Keep Listening" row: most recently played track *per distinct trackId*
+    // (so replaying a song bumps it to the front instead of listing every
+    // play as a separate row), capped to a wider recent window before
+    // dedup'ing so older repeats don't crowd out genuinely new tracks.
+    @Query(
+        """
+        SELECT * FROM play_history WHERE id IN (
+            SELECT MAX(id) FROM (
+                SELECT id, trackId FROM play_history ORDER BY timestamp DESC LIMIT 200
+            ) GROUP BY trackId
+        )
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    fun getKeepListening(limit: Int = 15): Flow<List<PlayHistoryEntity>>
+
+    // Distinct trackIds played since [sinceTimestamp] - used to figure out
+    // which favorites have gone "forgotten" (see MusicRepository.getForgottenFavorites).
+    @Query("SELECT DISTINCT trackId FROM play_history WHERE timestamp > :sinceTimestamp")
+    suspend fun getRecentlyPlayedTrackIds(sinceTimestamp: Long): List<Long>
+
     // Top genres by listen frequency, capped to the last 300 plays so taste
     // can drift over time instead of being locked in by old listening habits.
     @Query(
