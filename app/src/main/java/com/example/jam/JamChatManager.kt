@@ -3,85 +3,126 @@ package com.example.jam
 import com.example.data.model.ChatMessage
 import com.example.data.model.MessageReaction
 import com.example.data.model.MessageStatus
-import com.google.firebase.database.ChildEventListener
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.DatabaseError
-import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.ServerValue
-import com.google.firebase.database.ValueEventListener
+import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.realtime.RealtimeChannel
+import io.github.jan.supabase.realtime.broadcastFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.time.Instant
+import java.util.UUID
 
 /**
- * Real-time group chat for a Jam room, backed by the same Firebase Realtime
- * Database room JamManager uses (`jams/{code}/...`). Construct one alongside
- * a JamManager and call [attach] with the same room code once a room has been
- * created/joined.
+ * Real-time group chat for a Jam room, backed by **Supabase** (Postgrest for
+ * message persistence/history in the `jam_messages` table, Realtime Broadcast
+ * for instant delivery) instead of Firebase Realtime Database.
  *
- * Data lives under:
- *   jams/{code}/messages/{pushId}  -> { senderId, senderName, senderAvatarUrl,
- *                                       text, timestamp, replyToId, replyToText,
- *                                       replyToSenderName, reactions/{emoji}/{uid} }
- *   jams/{code}/typing/{uid}       -> true while that user is typing
+ * Reuses the SAME realtime channel JamManager already subscribes to for the
+ * room (one websocket connection per room handles both playback sync and
+ * chat) - call [attach] with `jamManager.realtimeChannel` right after
+ * `JamManager.createRoom`/`joinRoom` succeeds.
  *
- * Messages are streamed with a ChildEventListener (onChildAdded) instead of a
- * ValueEventListener on the whole list, so a growing chat history doesn't
- * re-download and re-parse every message on every new message.
+ * Data lives in:
+ *   jam_messages -> one row per message (id, code, sender fields, text,
+ *                   reply-to fields, reactions jsonb)
+ * Typing indicator moved to JamManager.setTyping() - see its doc comment for
+ * why (Presence only supports one tracked state per client per channel).
  */
 class JamChatManager {
 
-    private val db = FirebaseDatabase.getInstance().reference
+    @Serializable
+    private data class MessageRow(
+        val id: String,
+        val code: String,
+        @SerialName("sender_id") val senderId: String,
+        @SerialName("sender_name") val senderName: String,
+        @SerialName("sender_avatar_url") val senderAvatarUrl: String,
+        val text: String,
+        @SerialName("reply_to_id") val replyToId: String? = null,
+        @SerialName("reply_to_text") val replyToText: String? = null,
+        @SerialName("reply_to_sender_name") val replyToSenderName: String? = null,
+        val reactions: Map<String, List<String>> = emptyMap(),
+        @SerialName("created_at") val createdAt: String? = null,
+    ) {
+        fun toChatMessage(): ChatMessage = ChatMessage(
+            id = id,
+            jamId = code,
+            senderId = senderId,
+            senderName = senderName,
+            senderAvatarUrl = senderAvatarUrl,
+            text = text,
+            timestamp = createdAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+                ?: System.currentTimeMillis(),
+            replyToId = replyToId,
+            replyToText = replyToText,
+            replyToSenderName = replyToSenderName,
+            reactions = reactions.mapNotNull { (emoji, uids) -> if (uids.isEmpty()) null else MessageReaction(emoji, uids) },
+            status = MessageStatus.SENT,
+        )
+    }
 
+    @Serializable
+    private data class ReactionsColumnUpdate(val reactions: Map<String, List<String>>)
+
+    companion object {
+        private const val MESSAGES_TABLE = "jam_messages"
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var roomCode: String? = null
-    private var messagesListener: ChildEventListener? = null
-    private var typingListener: ValueEventListener? = null
+    private var channel: RealtimeChannel? = null
+    private val jobs = mutableListOf<Job>()
 
     var onMessageAdded: ((ChatMessage) -> Unit)? = null
     var onMessageChanged: ((ChatMessage) -> Unit)? = null
-    var onTypingUsersChanged: ((Set<String>) -> Unit)? = null
 
-    /** Start listening to messages/typing for [code]. Call after JamManager.createRoom/joinRoom. */
-    fun attach(code: String) {
+    /** Start listening to messages for [code] over [channel] (pass
+     *  `jamManager.realtimeChannel`, already subscribed by JamManager). */
+    fun attach(code: String, channel: RealtimeChannel?) {
         detach()
         roomCode = code
-        val roomRef = db.child("jams").child(code)
+        val ch = channel ?: return
+        this.channel = ch
 
-        val mListener = object : ChildEventListener {
-            override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
-                parseMessage(code, snapshot)?.let { onMessageAdded?.invoke(it) }
+        jobs += scope.launch {
+            ch.broadcastFlow<MessageRow>(event = "chat").collect { row ->
+                onMessageAdded?.invoke(row.toChatMessage())
             }
-            override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {
-                parseMessage(code, snapshot)?.let { onMessageChanged?.invoke(it) }
-            }
-            override fun onChildRemoved(snapshot: DataSnapshot) {}
-            override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
-            override fun onCancelled(error: DatabaseError) {}
         }
-        messagesListener = mListener
-        // Cap history pulled per session; plenty for an active listening session.
-        roomRef.child("messages").limitToLast(200).addChildEventListener(mListener)
+        jobs += scope.launch {
+            ch.broadcastFlow<MessageRow>(event = "reaction").collect { row ->
+                onMessageChanged?.invoke(row.toChatMessage())
+            }
+        }
 
-        val tListener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val typingUids = snapshot.children
-                    .filter { it.getValue(Boolean::class.java) == true }
-                    .mapNotNull { it.key }
-                    .toSet()
-                onTypingUsersChanged?.invoke(typingUids)
+        // Load recent history once on attach - equivalent to the old
+        // `.limitToLast(200)` on a Firebase ChildEventListener attach.
+        jobs += scope.launch {
+            try {
+                val history = SupabaseClient.client.postgrest[MESSAGES_TABLE]
+                    .select(columns = Columns.ALL) {
+                        filter { eq("code", code) }
+                        order("created_at", Order.ASCENDING)
+                        limit(200)
+                    }
+                    .decodeList<MessageRow>()
+                history.forEach { onMessageAdded?.invoke(it.toChatMessage()) }
+            } catch (e: Exception) {
+                // Non-fatal: live messages over broadcast still work even if history load fails.
             }
-            override fun onCancelled(error: DatabaseError) {}
         }
-        typingListener = tListener
-        roomRef.child("typing").addValueEventListener(tListener)
     }
 
     fun detach() {
-        val code = roomCode
-        if (code != null) {
-            val roomRef = db.child("jams").child(code)
-            messagesListener?.let { roomRef.child("messages").removeEventListener(it) }
-            typingListener?.let { roomRef.child("typing").removeEventListener(it) }
-        }
-        messagesListener = null
-        typingListener = null
+        jobs.forEach { it.cancel() }
+        jobs.clear()
+        channel = null
         roomCode = null
     }
 
@@ -92,71 +133,59 @@ class JamChatManager {
         text: String,
         replyToId: String? = null,
         replyToText: String? = null,
-        replyToSenderName: String? = null
+        replyToSenderName: String? = null,
     ) {
         val code = roomCode ?: return
+        val ch = channel ?: return
         if (text.isBlank()) return
-        val messagesRef = db.child("jams").child(code).child("messages")
-        val newRef = messagesRef.push()
-        val message = mapOf(
-            "senderId" to senderId,
-            "senderName" to senderName,
-            "senderAvatarUrl" to senderAvatarUrl,
-            "text" to text,
-            "timestamp" to ServerValue.TIMESTAMP,
-            "replyToId" to replyToId,
-            "replyToText" to replyToText,
-            "replyToSenderName" to replyToSenderName
-        )
-        newRef.setValue(message)
-    }
 
-    /** Toggle-style reaction: adding it if the user hasn't reacted with this emoji yet, else removing it. */
-    fun toggleReaction(messageId: String, emoji: String, uid: String) {
-        val code = roomCode ?: return
-        val reactionRef = db.child("jams").child(code).child("messages").child(messageId)
-            .child("reactions").child(emoji).child(uid)
-        reactionRef.get().addOnSuccessListener { snapshot ->
-            if (snapshot.exists()) reactionRef.removeValue() else reactionRef.setValue(true)
-        }
-    }
-
-    fun setTyping(uid: String, isTyping: Boolean) {
-        val code = roomCode ?: return
-        val ref = db.child("jams").child(code).child("typing").child(uid)
-        ref.setValue(isTyping)
-        ref.onDisconnect().removeValue()
-    }
-
-    private fun parseMessage(jamId: String, snapshot: DataSnapshot): ChatMessage? {
-        val senderId = snapshot.child("senderId").getValue(String::class.java) ?: return null
-        val senderName = snapshot.child("senderName").getValue(String::class.java) ?: "Someone"
-        val senderAvatarUrl = snapshot.child("senderAvatarUrl").getValue(String::class.java) ?: "🎧"
-        val text = snapshot.child("text").getValue(String::class.java) ?: return null
-        val timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
-        val replyToId = snapshot.child("replyToId").getValue(String::class.java)
-        val replyToText = snapshot.child("replyToText").getValue(String::class.java)
-        val replyToSenderName = snapshot.child("replyToSenderName").getValue(String::class.java)
-
-        val reactions = snapshot.child("reactions").children.mapNotNull { emojiSnap ->
-            val emoji = emojiSnap.key ?: return@mapNotNull null
-            val uids = emojiSnap.children.mapNotNull { it.key }
-            if (uids.isEmpty()) null else MessageReaction(emoji = emoji, userIds = uids)
-        }
-
-        return ChatMessage(
-            id = snapshot.key ?: return null,
-            jamId = jamId,
+        val row = MessageRow(
+            id = UUID.randomUUID().toString(),
+            code = code,
             senderId = senderId,
             senderName = senderName,
             senderAvatarUrl = senderAvatarUrl,
             text = text,
-            timestamp = timestamp,
             replyToId = replyToId,
             replyToText = replyToText,
             replyToSenderName = replyToSenderName,
-            reactions = reactions,
-            status = MessageStatus.SENT
         )
+        scope.launch {
+            try {
+                // Broadcast first so it feels instant (JamManager creates the
+                // channel with `broadcast { self = true }`, so our own bubble
+                // renders through the same onMessageAdded path as everyone
+                // else's - no separate local-echo codepath to keep in sync).
+                ch.broadcast(event = "chat", message = row)
+                SupabaseClient.client.postgrest[MESSAGES_TABLE].insert(row)
+            } catch (e: Exception) {
+                // Best-effort: if persistence fails the message still landed live.
+            }
+        }
+    }
+
+    /** Toggle-style reaction: adding it if the user hasn't reacted with this emoji yet, else removing it. */
+    fun toggleReaction(messageId: String, emoji: String, uid: String) {
+        val ch = channel ?: return
+        scope.launch {
+            try {
+                val current = SupabaseClient.client.postgrest[MESSAGES_TABLE]
+                    .select(columns = Columns.ALL) { filter { eq("id", messageId) } }
+                    .decodeSingleOrNull<MessageRow>() ?: return@launch
+
+                val existingUids = current.reactions[emoji].orEmpty()
+                val updatedUids = if (uid in existingUids) existingUids - uid else existingUids + uid
+                val updatedReactions = current.reactions.toMutableMap().apply {
+                    if (updatedUids.isEmpty()) remove(emoji) else put(emoji, updatedUids)
+                }
+
+                SupabaseClient.client.postgrest[MESSAGES_TABLE].update(ReactionsColumnUpdate(updatedReactions)) {
+                    filter { eq("id", messageId) }
+                }
+                ch.broadcast(event = "reaction", message = current.copy(reactions = updatedReactions))
+            } catch (e: Exception) {
+                // Best-effort - the tap just silently doesn't register if this fails.
+            }
+        }
     }
 }
