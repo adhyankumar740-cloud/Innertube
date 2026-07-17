@@ -18,7 +18,11 @@ import androidx.room.RoomDatabase
     // artwork/etc) instead of just title/artist/genre, so the Home screen's
     // "Keep Listening" row can render straight from history. Destructive
     // migration is fine here too - same reasoning as v5 above.
-    version = 6,
+    // v7: Download feature removed app-wide; dropped SavedTrackEntity.isDownloaded.
+    // Destructive migration (already configured below) simply rebuilds the
+    // local cache tables - Favorites/Playlists live on the user's account via
+    // cloud sync, so nothing user-facing is lost.
+    version = 7,
     exportSchema = false
 )
 abstract class MusicDatabase : RoomDatabase() {
