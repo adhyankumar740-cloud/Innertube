@@ -12,9 +12,6 @@ interface SavedTrackDao {
     @Query("SELECT * FROM saved_tracks ORDER BY addedAt DESC")
     fun getAllSavedTracks(): Flow<List<SavedTrackEntity>>
 
-    @Query("SELECT * FROM saved_tracks WHERE isDownloaded = 1 ORDER BY addedAt DESC")
-    fun getDownloadedTracks(): Flow<List<SavedTrackEntity>>
-
     @Query("SELECT * FROM saved_tracks WHERE isFavorite = 1 ORDER BY addedAt DESC")
     fun getFavoriteTracks(): Flow<List<SavedTrackEntity>>
 
