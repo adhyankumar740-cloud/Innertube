@@ -62,7 +62,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +77,7 @@ import com.example.data.model.LyricLine
 import com.example.data.model.Lyrics
 import com.example.data.model.Track
 import com.example.player.RepeatMode
+import com.example.util.ThumbnailUtils
 import java.util.concurrent.TimeUnit
 
 private enum class NowPlayingTab { QUEUE, LYRICS }
@@ -113,44 +116,78 @@ fun NowPlayingScreen(
 ) {
     var activeTab by remember { mutableStateOf<NowPlayingTab?>(null) }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 24.dp)
-    ) {
-        Spacer(modifier = Modifier.height(8.dp))
-
+    Box(modifier = modifier.fillMaxSize()) {
+        // Soft blurred backdrop of the artwork, tinted to the theme background,
+        // so the player has some depth/color instead of a flat black canvas -
+        // without ever touching the crisp foreground artwork below, which is
+        // what was making thumbnails look blurry before.
         AsyncImage(
-            model = track.artworkUrl,
-            contentDescription = "Now playing artwork",
+            model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.CARD),
+            contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(20.dp))
+                .fillMaxSize()
+                .blur(80.dp)
+                .alpha(0.35f)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.background
+                        )
+                    )
+                )
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
 
-        Text(
-            text = track.title,
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = track.artist,
-            color = Color.Gray,
-            fontSize = 15.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 2.dp)
-        )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+            ) {
+                AsyncImage(
+                    model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.PLAYER),
+                    contentDescription = "Now playing artwork",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                )
+            }
 
-        Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Text(
+                text = track.title,
+                color = Color.White,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = track.artist,
+                color = Color.Gray,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
 
         var isDragging by remember { mutableStateOf(false) }
         var dragPosition by remember { mutableFloatStateOf(0f) }
@@ -198,21 +235,29 @@ fun NowPlayingScreen(
 
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(72.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable(enabled = !isBuffering) { onPlayPauseClick() },
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center
             ) {
-                if (isBuffering) {
-                    CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.Black,
-                        modifier = Modifier.size(32.dp)
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .clickable(enabled = !isBuffering) { onPlayPauseClick() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isBuffering) {
+                        CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = Color.Black,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                 }
             }
 
@@ -244,7 +289,11 @@ fun NowPlayingScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                .padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             IconButton(onClick = onFavoriteClick) {
@@ -323,6 +372,7 @@ fun NowPlayingScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+        }
     }
 
     if (activeTab != null) {
@@ -393,7 +443,7 @@ private fun QueueSheetContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     AsyncImage(
-                        model = track.artworkUrl,
+                        model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.LIST_ROW),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))
