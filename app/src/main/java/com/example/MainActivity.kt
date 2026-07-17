@@ -68,6 +68,7 @@ import com.example.data.model.Track
 import com.example.data.youtube.YouTubeSession
 import com.example.di.AppContainer
 import com.example.ui.screens.AddToPlaylistDialog
+import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AnnouncementDialog
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.BottomPlayerTray
@@ -449,7 +450,12 @@ fun MainAppLayout(
                         "settings" -> SettingsScreen(
                             authViewModel = authViewModel,
                             announcementManager = appContainer.announcementManager,
-                            onBack = { musicViewModel.selectTab("library") }
+                            onBack = { musicViewModel.selectTab("library") },
+                            onAdminClick = { musicViewModel.selectTab("admin") }
+                        )
+                        "admin" -> AdminScreen(
+                            announcementManager = appContainer.announcementManager,
+                            onBack = { musicViewModel.selectTab("settings") }
                         )
                     }
                 }
