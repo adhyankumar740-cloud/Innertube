@@ -94,6 +94,8 @@ fun HomeScreen(
     val isSearching by musicViewModel.isSearching.collectAsState()
     val searchError by musicViewModel.searchError.collectAsState()
     val homeTracks by musicViewModel.homeTracks.collectAsState()
+    val keepListening by musicViewModel.keepListening.collectAsState()
+    val forgottenFavorites by musicViewModel.forgottenFavorites.collectAsState()
 
     var selectedCategory by remember { mutableStateOf("Chill") }
     var trackPendingPlaylistAdd by remember { mutableStateOf<Track?>(null) }
@@ -212,6 +214,54 @@ fun HomeScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                if (keepListening.isNotEmpty()) {
+                    Text(
+                        text = "Keep Listening",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
+                    ) {
+                        items(keepListening) { track ->
+                            TrackCardCompact(
+                                track = track,
+                                onPlayClick = { musicViewModel.playTrack(track, keepListening) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+
+                if (forgottenFavorites.isNotEmpty()) {
+                    Text(
+                        text = "Forgotten Favorites",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
+                    ) {
+                        items(forgottenFavorites) { track ->
+                            TrackCardCompact(
+                                track = track,
+                                onPlayClick = { musicViewModel.playTrack(track, forgottenFavorites) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+
                 // Recommended tracks
                 Text(
                     text = "Recommended for You",
@@ -325,6 +375,44 @@ fun HomeScreen(
                 onDismiss = { trackPendingPlaylistAdd = null }
             )
         }
+    }
+}
+
+@Composable
+fun TrackCardCompact(
+    track: Track,
+    onPlayClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .width(120.dp)
+            .clickable { onPlayClick() }
+    ) {
+        AsyncImage(
+            model = track.artworkUrl,
+            contentDescription = "${track.title} artwork",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(120.dp)
+                .clip(RoundedCornerShape(10.dp))
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = track.title,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = track.artist,
+            color = Color.Gray,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
