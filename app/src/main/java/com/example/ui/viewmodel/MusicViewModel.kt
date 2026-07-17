@@ -52,6 +52,15 @@ class MusicViewModel(
     private val _homeTracks = MutableStateFlow<List<Track>>(emptyList())
     val homeTracks = _homeTracks.asStateFlow()
 
+    // "Keep Listening" - live, always reflects your latest plays (no manual refresh needed).
+    val keepListening: StateFlow<List<Track>> = repository.getKeepListening()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // "Forgotten Favorites" - one-shot per Home load (shuffled pick, not a live query -
+    // re-shuffling on every favorite/play would make the row jump around while browsing).
+    private val _forgottenFavorites = MutableStateFlow<List<Track>>(emptyList())
+    val forgottenFavorites = _forgottenFavorites.asStateFlow()
+
     private val _selectedTab = MutableStateFlow("home")
     val selectedTab = _selectedTab.asStateFlow()
 
@@ -169,6 +178,9 @@ class MusicViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            _forgottenFavorites.value = repository.getForgottenFavorites()
+        }
     }
 
     /** Called on every keystroke - just updates state. The actual (debounced) API call happens in init{}. */
@@ -216,6 +228,11 @@ class MusicViewModel(
                 isDownloaded = repository.isTrackDownloaded(track.id)
             )
         }
+        // Unfavoriting from "Forgotten Favorites" should drop it from the row
+        // right away rather than leaving a stale heart icon until next Home load.
+        _forgottenFavorites.value = _forgottenFavorites.value
+            .filter { repository.isTrackFavorite(it.id) }
+            .map { track -> track.copy(isDownloaded = repository.isTrackDownloaded(track.id)) }
     }
 
     fun playTrack(track: Track, tracksList: List<Track>) {
