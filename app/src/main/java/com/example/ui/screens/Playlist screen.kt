@@ -225,7 +225,7 @@ private fun PlaylistRow(
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Delete \"${playlist.name}\"?") },
-            text = { Text("This removes the playlist. Songs stay in your Favorites/Downloads if saved there separately.") },
+            text = { Text("This removes the playlist. Songs stay in your Favorites if saved there separately.") },
             confirmButton = {
                 TextButton(onClick = { onDelete(); showDeleteConfirm = false }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
