@@ -132,6 +132,23 @@ class MusicRepository(
         searchHistoryDao.insertQuery(SearchHistoryEntity(query = trimmed))
     }
 
+    /**
+     * Recent search queries, most recent first, deduped by text (a query
+     * searched multiple times only shows up once, at its most recent
+     * position) - powers the "recent searches" list on the Search screen.
+     */
+    suspend fun getRecentSearchQueries(limit: Int = 20): List<String> = withContext(Dispatchers.IO) {
+        searchHistoryDao.getRecentQueries(limit * 3) // over-fetch since dedup can drop rows
+            .map { it.query }
+            .distinct()
+            .take(limit)
+    }
+
+    /** Wipes all locally stored search history (Search screen "Clear all"). */
+    suspend fun clearSearchHistory() = withContext(Dispatchers.IO) {
+        searchHistoryDao.clearSearchHistory()
+    }
+
     /** Call whenever a track actually starts playing, to feed listening-history-based recommendations. */
     suspend fun recordTrackPlayed(track: Track) = withContext(Dispatchers.IO) {
         val genre = resolveGenre(track)
