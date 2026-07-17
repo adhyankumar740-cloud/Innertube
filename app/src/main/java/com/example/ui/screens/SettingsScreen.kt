@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.ChevronRight
@@ -65,6 +66,7 @@ fun SettingsScreen(
     authViewModel: AuthViewModel,
     announcementManager: AnnouncementManager,
     onBack: () -> Unit,
+    onAdminClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -179,6 +181,21 @@ fun SettingsScreen(
                         icon = Icons.Default.Info,
                         title = "App version",
                         subtitle = BuildConfig.VERSION_NAME
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = "ADMIN",
+                        color = Color.Gray,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    SettingsRow(
+                        icon = Icons.Default.AdminPanelSettings,
+                        title = "Send an announcement",
+                        subtitle = "Admin sign-in required",
+                        onClick = onAdminClick
                     )
                 }
             }
