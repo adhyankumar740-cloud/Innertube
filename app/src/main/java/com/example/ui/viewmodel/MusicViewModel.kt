@@ -75,11 +75,8 @@ class MusicViewModel(
     private val _isLoadingLyrics = MutableStateFlow(false)
     val isLoadingLyrics: StateFlow<Boolean> = _isLoadingLyrics.asStateFlow()
 
-    // Observe Saved/Downloaded/Favorite Tracks from database
+    // Observe Saved/Favorite Tracks from database
     val favoriteTracks: StateFlow<List<Track>> = repository.getFavoriteTracks()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val downloadedTracks: StateFlow<List<Track>> = repository.getDownloadedTracks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val libraryTracks: StateFlow<List<Track>> = repository.getSavedTracks()
@@ -232,31 +229,17 @@ class MusicViewModel(
         }
     }
 
-    fun toggleDownload(track: Track) {
-        viewModelScope.launch {
-            repository.toggleDownload(track)
-            updateTrackStates()
-        }
-    }
-
     private suspend fun updateTrackStates() {
         _homeTracks.value = _homeTracks.value.map { track ->
-            track.copy(
-                isFavorite = repository.isTrackFavorite(track.id),
-                isDownloaded = repository.isTrackDownloaded(track.id)
-            )
+            track.copy(isFavorite = repository.isTrackFavorite(track.id))
         }
         _searchResults.value = _searchResults.value.map { track ->
-            track.copy(
-                isFavorite = repository.isTrackFavorite(track.id),
-                isDownloaded = repository.isTrackDownloaded(track.id)
-            )
+            track.copy(isFavorite = repository.isTrackFavorite(track.id))
         }
         // Unfavoriting from "Forgotten Favorites" should drop it from the row
         // right away rather than leaving a stale heart icon until next Home load.
         _forgottenFavorites.value = _forgottenFavorites.value
             .filter { repository.isTrackFavorite(it.id) }
-            .map { track -> track.copy(isDownloaded = repository.isTrackDownloaded(track.id)) }
     }
 
     fun playTrack(track: Track, tracksList: List<Track>) {
