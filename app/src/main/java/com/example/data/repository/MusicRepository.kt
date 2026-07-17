@@ -165,7 +165,6 @@ class MusicRepository(
                 val track = row.toTrack()
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
                 track.copy(
-                    isDownloaded = localEntity?.isDownloaded ?: false,
                     isFavorite = localEntity?.isFavorite ?: false
                 )
             }
@@ -247,7 +246,6 @@ class MusicRepository(
             val enrichedTracks = tracks.map { track ->
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
                 track.copy(
-                    isDownloaded = localEntity?.isDownloaded ?: false,
                     isFavorite = localEntity?.isFavorite ?: false
                 )
             }
@@ -310,7 +308,6 @@ class MusicRepository(
             val enriched = tracks.map { track ->
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
                 track.copy(
-                    isDownloaded = localEntity?.isDownloaded ?: false,
                     isFavorite = localEntity?.isFavorite ?: false
                 )
             }
@@ -334,7 +331,6 @@ class MusicRepository(
             val reenriched = cached.map { track ->
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
                 track.copy(
-                    isDownloaded = localEntity?.isDownloaded ?: false,
                     isFavorite = localEntity?.isFavorite ?: false
                 )
             }
@@ -347,7 +343,6 @@ class MusicRepository(
             val enriched = tracks.map { track ->
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
                 track.copy(
-                    isDownloaded = localEntity?.isDownloaded ?: false,
                     isFavorite = localEntity?.isFavorite ?: false
                 )
             }
@@ -511,12 +506,6 @@ class MusicRepository(
         }
     }
 
-    fun getDownloadedTracks(): Flow<List<Track>> {
-        return savedTrackDao.getDownloadedTracks().map { list ->
-            list.map { it.toTrack() }
-        }
-    }
-
     fun getFavoriteTracks(): Flow<List<Track>> {
         return savedTrackDao.getFavoriteTracks().map { list ->
             list.map { it.toTrack() }
@@ -527,7 +516,7 @@ class MusicRepository(
         val existing = savedTrackDao.getSavedTrackById(track.id)
         if (existing != null) {
             val updated = existing.copy(isFavorite = !existing.isFavorite)
-            if (!updated.isFavorite && !updated.isDownloaded) {
+            if (!updated.isFavorite) {
                 savedTrackDao.deleteSavedTrackById(track.id)
             } else {
                 savedTrackDao.insertSavedTrack(updated)
@@ -538,27 +527,8 @@ class MusicRepository(
         }
     }
 
-    suspend fun toggleDownload(track: Track) = withContext(Dispatchers.IO) {
-        val existing = savedTrackDao.getSavedTrackById(track.id)
-        if (existing != null) {
-            val updated = existing.copy(isDownloaded = !existing.isDownloaded)
-            if (!updated.isFavorite && !updated.isDownloaded) {
-                savedTrackDao.deleteSavedTrackById(track.id)
-            } else {
-                savedTrackDao.insertSavedTrack(updated)
-            }
-        } else {
-            val entity = SavedTrackEntity.fromTrack(track, isDownloaded = true)
-            savedTrackDao.insertSavedTrack(entity)
-        }
-    }
-
     suspend fun isTrackFavorite(trackId: Long): Boolean = withContext(Dispatchers.IO) {
         savedTrackDao.getSavedTrackById(trackId)?.isFavorite ?: false
-    }
-
-    suspend fun isTrackDownloaded(trackId: Long): Boolean = withContext(Dispatchers.IO) {
-        savedTrackDao.getSavedTrackById(trackId)?.isDownloaded ?: false
     }
 
     // ---- Playlists: create, import, play ----
