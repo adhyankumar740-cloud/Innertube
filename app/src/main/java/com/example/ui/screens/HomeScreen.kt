@@ -35,13 +35,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -53,8 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,19 +78,18 @@ fun HomeScreen(
     musicViewModel: MusicViewModel,
     authViewModel: AuthViewModel,
     playlistViewModel: PlaylistViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Search now lives on its own bottom-nav tab. This just jumps the user
+    // there when they tap the search icon in the Home header, instead of
+    // Home owning its own search box + results list.
+    onSearchClick: () -> Unit = {}
 ) {
     val username by authViewModel.username.collectAsState()
-    val searchQuery by musicViewModel.searchQuery.collectAsState()
-    val searchResults by musicViewModel.searchResults.collectAsState()
-    val isSearching by musicViewModel.isSearching.collectAsState()
-    val searchError by musicViewModel.searchError.collectAsState()
     val homeTracks by musicViewModel.homeTracks.collectAsState()
     val keepListening by musicViewModel.keepListening.collectAsState()
     val forgottenFavorites by musicViewModel.forgottenFavorites.collectAsState()
 
     var selectedCategory by remember { mutableStateOf("Chill") }
-    var trackPendingPlaylistAdd by remember { mutableStateOf<Track?>(null) }
     val greeting = remember { currentGreeting() }
 
     val categories = listOf("Chill", "Pop", "Lo-Fi", "Electronic", "Alternative")
@@ -133,247 +124,147 @@ fun HomeScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
-            }
 
-            // Search input
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = {
-                    musicViewModel.search(it)
-                },
-                placeholder = { Text("Search songs, artists...", color = Color.Gray) },
-                leadingIcon = {
+                IconButton(
+                    onClick = onSearchClick,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Search,
-                        contentDescription = "Search icon",
+                        contentDescription = "Go to search",
                         tint = MaterialTheme.colorScheme.primary
                     )
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { musicViewModel.search("") }) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Clear search",
-                                tint = Color.Gray
-                            )
-                        }
-                    }
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Color.DarkGray,
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                ),
-                singleLine = true,
+                }
+            }
+
+            // Categories
+            LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .testTag("search_input")
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (searchQuery.isEmpty()) {
-                // Categories
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(categories) { category ->
-                        val isSelected = category == selectedCategory
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
-                                )
-                                .clickable {
-                                    selectedCategory = category
-                                    val term = when (category) {
-                                        "Lo-Fi" -> "lofi chill"
-                                        "Electronic" -> "synthwave"
-                                        else -> category.lowercase()
-                                    }
-                                    musicViewModel.fetchHomeRecommendations()
-                                }
-                                .padding(horizontal = 20.dp, vertical = 10.dp)
-                        ) {
-                            Text(
-                                text = category,
-                                color = if (isSelected) Color.Black else Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                if (keepListening.isNotEmpty()) {
-                    Text(
-                        text = "Keep Listening",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 20.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
-                    ) {
-                        items(keepListening) { track ->
-                            TrackCardCompact(
-                                track = track,
-                                onPlayClick = { musicViewModel.playTrack(track, keepListening) }
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-
-                if (forgottenFavorites.isNotEmpty()) {
-                    Text(
-                        text = "Forgotten Favorites",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 20.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
-                    ) {
-                        items(forgottenFavorites) { track ->
-                            TrackCardCompact(
-                                track = track,
-                                onPlayClick = { musicViewModel.playTrack(track, forgottenFavorites) }
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-
-                // Recommended tracks
-                Text(
-                    text = "Recommended for You",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (isSearching) {
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(homeTracks) { track ->
-                            TrackRow(
-                                track = track,
-                                onPlayClick = { musicViewModel.playTrack(track, homeTracks) },
-                                onFavoriteClick = { musicViewModel.toggleFavorite(track) },
-                                onDownloadClick = { musicViewModel.toggleDownload(track) },
-                                onAddToPlaylistClick = { trackPendingPlaylistAdd = track }
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Search Results
-                Text(
-                    text = "Search Results",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (isSearching) {
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
-                } else if (searchResults.isEmpty()) {
+                    .padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(categories) { category ->
+                    val isSelected = category == selectedCategory
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = searchError ?: "No results found for \"$searchQuery\"",
-                                color = if (searchError != null) MaterialTheme.colorScheme.error else Color.Gray,
-                                textAlign = TextAlign.Center
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
                             )
-                            // Only shown for a genuine failure (bad connection, quota,
-                            // etc.) - not for a search that succeeded with zero matches.
-                            // Retyping the same query normally wouldn't re-trigger a
-                            // search (it hasn't "changed"), so without this the only
-                            // way to retry was deleting a character and typing it
-                            // back in.
-                            if (searchError != null) {
-                                TextButton(onClick = { musicViewModel.retrySearch() }) {
-                                    Text("Retry")
+                            .clickable {
+                                selectedCategory = category
+                                musicViewModel.fetchHomeRecommendations()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = category,
+                            color = if (isSelected) Color.Black else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp)
+            ) {
+                if (keepListening.isNotEmpty()) {
+                    item {
+                        Column {
+                            Text(
+                                text = "Keep Listening",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 20.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
+                            ) {
+                                items(keepListening) { track ->
+                                    TrackCardCompact(
+                                        track = track,
+                                        onPlayClick = { musicViewModel.playTrack(track, keepListening) }
+                                    )
                                 }
                             }
                         }
                     }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(searchResults) { track ->
-                            TrackRow(
-                                track = track,
-                                // Queue just this one song (not the whole search
-                                // results list) - otherwise "next" just walks
-                                // down the search results in relevance order
-                                // (mixed genres/artists, sometimes the same song
-                                // re-uploaded twice) instead of picking a genre
-                                // match. See MusicPlayer.triggerAutoplay / 
-                                // MusicRepository.getAutoplayRecommendation.
-                                onPlayClick = { musicViewModel.playTrack(track, listOf(track)) },
-                                onFavoriteClick = { musicViewModel.toggleFavorite(track) },
-                                onDownloadClick = { musicViewModel.toggleDownload(track) },
-                                onAddToPlaylistClick = { trackPendingPlaylistAdd = track }
+                }
+
+                if (forgottenFavorites.isNotEmpty()) {
+                    item {
+                        Column {
+                            Text(
+                                text = "Forgotten Favorites",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 20.dp)
                             )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
+                            ) {
+                                items(forgottenFavorites) { track ->
+                                    TrackCardCompact(
+                                        track = track,
+                                        onPlayClick = { musicViewModel.playTrack(track, forgottenFavorites) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Column {
+                        Text(
+                            text = "Recommended for You",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Clean, uncluttered rows: just artwork, title/artist, and
+                        // tap to play. Favorite/download/add-to-playlist controls
+                        // stay on the Search screen where the user is actively
+                        // picking a specific track, instead of crowding every
+                        // recommendation on Home.
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            homeTracks.forEach { track ->
+                                TrackRow(
+                                    track = track,
+                                    onPlayClick = { musicViewModel.playTrack(track, homeTracks) }
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
-
-        trackPendingPlaylistAdd?.let { track ->
-            AddToPlaylistDialog(
-                track = track,
-                playlistViewModel = playlistViewModel,
-                onDismiss = { trackPendingPlaylistAdd = null }
-            )
         }
     }
 }
@@ -420,8 +311,8 @@ fun TrackCardCompact(
 fun TrackRow(
     track: Track,
     onPlayClick: () -> Unit,
-    onFavoriteClick: () -> Unit,
-    onDownloadClick: () -> Unit,
+    onFavoriteClick: (() -> Unit)? = null,
+    onDownloadClick: (() -> Unit)? = null,
     onAddToPlaylistClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -481,21 +372,26 @@ fun TrackRow(
                 }
             }
 
-            // Favorites & Download controls
-            IconButton(onClick = onFavoriteClick) {
-                Icon(
-                    imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Favorite icon",
-                    tint = if (track.isFavorite) MaterialTheme.colorScheme.tertiary else Color.Gray
-                )
+            // Favorites & Download controls - only shown when the caller wires
+            // them up (Search does; Home's Recommended rows keep it minimal).
+            if (onFavoriteClick != null) {
+                IconButton(onClick = onFavoriteClick) {
+                    Icon(
+                        imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "Favorite icon",
+                        tint = if (track.isFavorite) MaterialTheme.colorScheme.tertiary else Color.Gray
+                    )
+                }
             }
 
-            IconButton(onClick = onDownloadClick) {
-                Icon(
-                    imageVector = Icons.Default.Download,
-                    contentDescription = "Download icon",
-                    tint = if (track.isDownloaded) MaterialTheme.colorScheme.primary else Color.Gray
-                )
+            if (onDownloadClick != null) {
+                IconButton(onClick = onDownloadClick) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Download icon",
+                        tint = if (track.isDownloaded) MaterialTheme.colorScheme.primary else Color.Gray
+                    )
+                }
             }
         }
     }
