@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -51,6 +52,7 @@ fun LibraryScreen(
     musicViewModel: MusicViewModel,
     authViewModel: AuthViewModel,
     playlistViewModel: PlaylistViewModel,
+    onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val username by authViewModel.username.collectAsState()
@@ -113,15 +115,27 @@ fun LibraryScreen(
                     }
                 }
 
-                IconButton(
-                    onClick = { authViewModel.logout() },
-                    modifier = Modifier.testTag("logout_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Logout,
-                        contentDescription = "Logout",
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onSettingsClick,
+                        modifier = Modifier.testTag("settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(
+                        onClick = { authViewModel.logout() },
+                        modifier = Modifier.testTag("logout_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Logout,
+                            contentDescription = "Logout",
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
                 }
             }
 
