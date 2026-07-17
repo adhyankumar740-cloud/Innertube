@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -9,6 +10,19 @@ plugins {
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
 }
+
+// Supabase project credentials for the Jam feature (see SETUP_GUIDE.md section 6).
+// Put SUPABASE_URL / SUPABASE_ANON_KEY in local.properties (gitignored) - falls back
+// to environment variables (useful for CI) and finally to an empty string so the
+// build never fails just because these aren't configured yet.
+val localProperties = Properties().apply {
+  val localPropertiesFile = rootProject.file("local.properties")
+  if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { load(it) }
+  }
+}
+fun secret(key: String): String =
+  (localProperties.getProperty(key) ?: System.getenv(key) ?: "")
 
 android {
   namespace = "com.example"
@@ -22,6 +36,9 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
+    buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
   }
 
   signingConfigs {
@@ -111,11 +128,26 @@ dependencies {
   implementation(libs.media3.database)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
+  // firebase-database is kept for AnnouncementManager + PlaylistCloudSync (both
+  // still use Firebase Realtime Database). Jam itself no longer uses it - see
+  // com.example.jam.SupabaseClient / JamManager / JamChatManager, which now run
+  // on Supabase (Postgrest + Realtime) instead.
   implementation(libs.firebase.database)
-  // firebase-auth is kept ONLY for JamManager's anonymous sign-in, which
-  // satisfies the Realtime Database's "auth != null" security rule for the
-  // Jam feature - it has nothing to do with user-facing login anymore.
+  // firebase-auth is kept for: (1) Google Sign-In's underlying credential, and
+  // (2) JamManager's anonymous-sign-in fallback, which is ONLY used as a stable
+  // per-device identity (uid) for Jam - it has nothing to do with where Jam's
+  // room/chat data actually lives anymore (that's Supabase now).
   implementation(libs.firebase.auth)
+  // Jam (group listening + chat) backend - Supabase Postgrest (room/message
+  // persistence) + Supabase Realtime (Broadcast for instant playback/chat sync,
+  // Presence for the live participant list). See SETUP_GUIDE.md section 6.
+  implementation(platform(libs.supabase.bom))
+  implementation(libs.supabase.postgrest)
+  implementation(libs.supabase.realtime)
+  implementation(libs.ktor.client.core)
+  implementation(libs.ktor.client.okhttp)
+  implementation(libs.ktor.client.content.negotiation)
+  implementation(libs.ktor.serialization.json)
   implementation(libs.play.services.auth)
   implementation(libs.firebase.appcheck.recaptcha)
   // Native "Sign in with Google" via Credential Manager - this is the
