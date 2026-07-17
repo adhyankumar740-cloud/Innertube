@@ -3,6 +3,7 @@ package com.example.data.network
 import com.example.data.model.Track
 import com.example.data.model.TrackSource
 import com.metrolist.innertube.YouTube
+import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import com.metrolist.innertube.models.YouTubeLocale
@@ -65,6 +66,51 @@ object InnerTubeMusicService {
             .minByOrNull { it.chartPosition ?: Int.MAX_VALUE }
             ?: return null
         return top.toTrack()
+    }
+
+    /**
+     * Real genre/mood list from YouTube Music's own "Moods & Genres" page
+     * (FEmusic_moods_and_genres), instead of a dozen hardcoded strings. Used
+     * to populate the onboarding genre picker with whatever YT Music itself
+     * is currently organized around (usually 30-40+ entries: Pop, Hip-Hop,
+     * Chill, Workout, Sleep, Bollywood, Afrobeats, K-Pop, etc., grouped by
+     * the "For you" / "Energy" / "Mood" / "Genre" sections it returns).
+     */
+    suspend fun getGenres(): List<String> {
+        ensureLocale()
+        val sections = YouTube.moodAndGenres().getOrThrow()
+        return sections
+            .flatMap { it.items }
+            .map { it.title }
+            .distinct()
+    }
+
+    /**
+     * Real artist suggestions from YouTube Music search (FILTER_ARTIST),
+     * seeded by the genres the user picked in onboarding - instead of a
+     * fixed list of 16 artists. Searches each selected genre name as a query
+     * (e.g. "Hip-Hop", "Bollywood") and collects the top artist results for
+     * each, deduped, up to [maxTotal]. This mirrors real YT Music results
+     * rather than a curated static list, so it scales to any genre/locale.
+     */
+    suspend fun getArtistsForGenres(
+        genres: List<String>,
+        perGenre: Int = 10,
+        maxTotal: Int = 60
+    ): List<String> {
+        ensureLocale()
+        if (genres.isEmpty()) return emptyList()
+        val names = LinkedHashSet<String>()
+        for (genre in genres) {
+            if (names.size >= maxTotal) break
+            val result = YouTube.search(genre, YouTube.SearchFilter.FILTER_ARTIST).getOrNull()
+                ?: continue
+            result.items
+                .filterIsInstance<ArtistItem>()
+                .take(perGenre)
+                .forEach { names.add(it.title) }
+        }
+        return names.toList()
     }
 }
 
