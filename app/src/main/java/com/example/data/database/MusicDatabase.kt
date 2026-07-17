@@ -14,12 +14,11 @@ import androidx.room.RoomDatabase
         PlaylistEntity::class,
         PlaylistTrackEntity::class
     ],
-    // v5: added PlaylistEntity.remoteId (stable UUID for cloud backup/restore,
-    // see PlaylistCloudSync) - fallbackToDestructiveMigration below means this
-    // is a clean recreate on upgrade, which is fine: local Room data here is
-    // just an on-device cache, and the whole point of this column is that the
-    // real backup now lives in the cloud instead.
-    version = 5,
+    // v6: PlayHistoryEntity now carries a full track snapshot (album/preview/
+    // artwork/etc) instead of just title/artist/genre, so the Home screen's
+    // "Keep Listening" row can render straight from history. Destructive
+    // migration is fine here too - same reasoning as v5 above.
+    version = 6,
     exportSchema = false
 )
 abstract class MusicDatabase : RoomDatabase() {
