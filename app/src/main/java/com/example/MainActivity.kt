@@ -78,6 +78,7 @@ import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SamplesScreen
 import com.example.ui.screens.SearchScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.JamViewModel
@@ -439,7 +440,17 @@ fun MainAppLayout(
                         "search" -> SearchScreen(musicViewModel = musicViewModel, playlistViewModel = playlistViewModel)
                         "samples" -> SamplesScreen(samplesViewModel = samplesViewModel)
                         "jam" -> JamScreen(jamViewModel = jamViewModel, authViewModel = authViewModel)
-                        "library" -> LibraryScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
+                        "library" -> LibraryScreen(
+                            musicViewModel = musicViewModel,
+                            authViewModel = authViewModel,
+                            playlistViewModel = playlistViewModel,
+                            onSettingsClick = { musicViewModel.selectTab("settings") }
+                        )
+                        "settings" -> SettingsScreen(
+                            authViewModel = authViewModel,
+                            announcementManager = appContainer.announcementManager,
+                            onBack = { musicViewModel.selectTab("library") }
+                        )
                     }
                 }
             }
