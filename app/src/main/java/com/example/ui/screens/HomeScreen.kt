@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +49,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -88,6 +95,7 @@ fun HomeScreen(
     val homeTracks by musicViewModel.homeTracks.collectAsState()
     val keepListening by musicViewModel.keepListening.collectAsState()
     val forgottenFavorites by musicViewModel.forgottenFavorites.collectAsState()
+    val trendingTrack by musicViewModel.trendingTrack.collectAsState()
 
     var selectedCategory by remember { mutableStateOf("Chill") }
     val greeting = remember { currentGreeting() }
@@ -179,6 +187,16 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp)
             ) {
+                if (trendingTrack != null) {
+                    item {
+                        TrendingBannerCard(
+                            track = trendingTrack!!,
+                            onPlayClick = { musicViewModel.playTrack(trendingTrack!!, listOf(trendingTrack!!)) },
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                    }
+                }
+
                 if (keepListening.isNotEmpty()) {
                     item {
                         Column {
@@ -265,6 +283,119 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Home banner - shows today's real #1 trending track from YouTube Music's
+ * charts (see MusicViewModel.trendingTrack), auto-refreshed hourly. Sticker/
+ * collage styling (offset shadow "cut-out" card, tilted artwork, live pill)
+ * built entirely from the app's own theme colors (Theme.kt / Color.kt) so it
+ * matches the rest of the app instead of introducing a new palette.
+ */
+@Composable
+fun TrendingBannerCard(
+    track: Track,
+    onPlayClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "live-dot")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.25f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(800),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "live-dot-alpha"
+    )
+
+    Box(modifier = modifier.fillMaxWidth()) {
+        // Hard offset "sticker" shadow behind the card, in the background
+        // color, instead of a soft blurred elevation shadow.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(top = 8.dp, start = 8.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(MaterialTheme.colorScheme.background)
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.secondary,
+                            MaterialTheme.colorScheme.tertiary
+                        )
+                    )
+                )
+                .clickable { onPlayClick() }
+                .padding(20.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(0.72f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = dotAlpha))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "#1 TRENDING NOW",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = track.title,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 24.sp
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "${track.artist} · updates hourly",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            AsyncImage(
+                model = ThumbnailUtils.resized(track.artworkUrl, ThumbnailUtils.Size.CARD),
+                contentDescription = "${track.title} artwork",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(96.dp)
+                    .graphicsLayer { rotationZ = 8f }
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(14.dp))
+            )
         }
     }
 }
