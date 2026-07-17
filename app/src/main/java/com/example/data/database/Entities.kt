@@ -15,10 +15,9 @@ data class SavedTrackEntity(
     val artworkUrl: String,
     val durationMs: Long,
     val genre: String,
-    val isDownloaded: Boolean,
     val isFavorite: Boolean,
     val addedAt: Long = System.currentTimeMillis(),
-    // Persisted so a favorited/downloaded YouTube full-song still plays correctly
+    // Persisted so a favorited YouTube full-song still plays correctly
     // (not just its iTunes-preview counterpart) when reopened from Library.
     val source: String = "ITUNES",
     val youtubeVideoId: String? = null,
@@ -33,7 +32,6 @@ data class SavedTrackEntity(
         artworkUrl = artworkUrl,
         durationMs = durationMs,
         genre = genre,
-        isDownloaded = isDownloaded,
         isFavorite = isFavorite,
         source = if (source == "YOUTUBE") TrackSource.YOUTUBE else TrackSource.ITUNES,
         youtubeVideoId = youtubeVideoId,
@@ -41,7 +39,7 @@ data class SavedTrackEntity(
     )
 
     companion object {
-        fun fromTrack(track: Track, isDownloaded: Boolean = track.isDownloaded, isFavorite: Boolean = track.isFavorite) = SavedTrackEntity(
+        fun fromTrack(track: Track, isFavorite: Boolean = track.isFavorite) = SavedTrackEntity(
             id = track.id,
             title = track.title,
             artist = track.artist,
@@ -50,7 +48,6 @@ data class SavedTrackEntity(
             artworkUrl = track.artworkUrl,
             durationMs = track.durationMs,
             genre = track.genre,
-            isDownloaded = isDownloaded,
             isFavorite = isFavorite,
             source = track.source.name,
             youtubeVideoId = track.youtubeVideoId,
@@ -133,7 +130,7 @@ data class PlayHistoryEntity(
 /**
  * A user-created playlist. Tracks live in [PlaylistTrackEntity], keyed by
  * (playlistId, trackId) - so a playlist owns its own snapshot of each track's
- * fields and doesn't break if the track is later removed from Favorites/Downloads.
+ * fields and doesn't break if the track is later removed from Favorites.
  *
  * [remoteId] is a stable, device-independent key (random UUID, generated once
  * at creation) used purely for cloud backup/restore (see PlaylistCloudSync) -
