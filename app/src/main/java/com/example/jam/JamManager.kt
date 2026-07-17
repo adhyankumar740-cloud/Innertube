@@ -1,7 +1,8 @@
 package com.example.jam
 
+import android.content.Context
+import com.example.data.local.DeviceIdentity
 import com.example.data.model.Song
-import com.google.firebase.auth.FirebaseAuth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.realtime.RealtimeChannel
@@ -13,7 +14,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -48,7 +48,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  * internal trackers but never fire the onRemote* callbacks for it, which is
  * what stops the local player from restarting/pausing itself.
  */
-class JamManager {
+class JamManager(private val context: Context) {
 
     data class JamParticipant(
         val uid: String,
@@ -178,7 +178,6 @@ class JamManager {
     private inline fun <reified T> T.toJsonObject(): JsonObject =
         json.encodeToJsonElement(this) as JsonObject
 
-    private val auth = FirebaseAuth.getInstance()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     var roomCode: String? = null
@@ -208,13 +207,17 @@ class JamManager {
     var onTypingUsersChanged: ((Set<String>) -> Unit)? = null
     var onLog: ((String) -> Unit)? = null
 
-    private suspend fun ensureSignedIn(): String {
+    private fun ensureSignedIn(): String {
         myUid?.let { return it }
-        val user = auth.currentUser ?: auth.signInAnonymously().await().user
-        val uid = user?.uid ?: throw IllegalStateException("Firebase anonymous sign-in failed")
+        val uid = DeviceIdentity.getUid(context)
         myUid = uid
         return uid
     }
+
+    /** This device's stable local id (see [DeviceIdentity]). Exposed so callers
+     *  like JamViewModel can show/compare "my" uid without depending on any
+     *  auth SDK themselves. */
+    fun localUid(): String = ensureSignedIn()
 
     /** Creates a brand-new Jam room and returns the shareable room code. */
     suspend fun createRoom(
