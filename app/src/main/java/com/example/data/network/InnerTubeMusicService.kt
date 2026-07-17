@@ -46,6 +46,26 @@ object InnerTubeMusicService {
             .take(limit)
             .map { it.toTrack() }
     }
+
+    /**
+     * Pulls YouTube Music's real "Trending" chart (FEmusic_charts) and returns
+     * the current #1 track, so the Home banner reflects what's actually
+     * trending right now instead of a static/hardcoded pick. Falls back to the
+     * "Top" chart section if a dedicated Trending section isn't present for
+     * the user's locale that day.
+     */
+    suspend fun getTrendingTrack(): Track? {
+        ensureLocale()
+        val charts = YouTube.getChartsPage().getOrNull() ?: return null
+        val section = charts.sections.firstOrNull { it.chartType == com.metrolist.innertube.pages.ChartsPage.ChartType.TRENDING }
+            ?: charts.sections.firstOrNull { it.chartType == com.metrolist.innertube.pages.ChartsPage.ChartType.TOP }
+            ?: return null
+        val top = section.items
+            .filterIsInstance<SongItem>()
+            .minByOrNull { it.chartPosition ?: Int.MAX_VALUE }
+            ?: return null
+        return top.toTrack()
+    }
 }
 
 /** Converts an InnerTube [SongItem] search result into the app's unified [Track] model. */
