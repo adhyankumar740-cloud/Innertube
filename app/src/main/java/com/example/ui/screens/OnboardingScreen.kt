@@ -1,142 +1,340 @@
-package com.example.ui.viewmodel
+package com.example.ui.screens
 
-import android.content.Context
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewModelScope
-import com.example.data.local.OnboardingPreferences
-import com.example.data.network.InnerTubeMusicService
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.ui.viewmodel.OnboardingViewModel
 
 /**
- * Spotify-style first-launch onboarding: pick a few genres, then a few
- * artists you like. The picks are saved locally and fed into
- * [com.example.data.repository.MusicRepository]'s personalization profile so
- * Home/Samples recommendations reflect them immediately - before the app has
- * any real listening/search history to learn from.
+ * First-launch-only onboarding: pick a few genres, then a few artists.
+ * Selections are saved via [OnboardingViewModel] and used to personalize
+ * Home/Samples recommendations from the very first session.
  *
- * GENRE/ARTIST SOURCE FIX: this used to show a fixed list of 12 hardcoded
- * genres and 16 hardcoded artists, which looked sparse/repetitive and didn't
- * reflect what's actually available on YouTube Music. Both lists are now
- * pulled live from InnerTube: genres from YT Music's own "Moods & Genres"
- * page (usually 30-40+ real entries), and artists from InnerTube search
- * seeded by whichever genres the user picked (up to 60, deduped). If the
- * network call fails (no connection, InnerTube hiccup) we fall back to a
- * small built-in list so onboarding never shows an empty screen.
+ * LIST SIZE FIX: genres/artists used to be a fixed list of 12/16 hardcoded
+ * strings, which looked sparse next to Spotify/YT Music's own onboarding.
+ * Both grids now render whatever [OnboardingViewModel] pulled live from
+ * InnerTube (real Moods & Genres list, and artist search seeded by the
+ * genres you picked) - typically 30-60+ items - with a 3-column grid and a
+ * loading/retry state while that network call is in flight.
  */
-class OnboardingViewModel(private val context: Context) : ViewModel() {
+@Composable
+fun OnboardingScreen(
+    onboardingViewModel: OnboardingViewModel,
+    modifier: Modifier = Modifier
+) {
+    val step by onboardingViewModel.step.collectAsState()
+    val selectedGenres by onboardingViewModel.selectedGenres.collectAsState()
+    val selectedArtists by onboardingViewModel.selectedArtists.collectAsState()
+    val availableGenres by onboardingViewModel.availableGenres.collectAsState()
+    val isLoadingGenres by onboardingViewModel.isLoadingGenres.collectAsState()
+    val availableArtists by onboardingViewModel.availableArtists.collectAsState()
+    val isLoadingArtists by onboardingViewModel.isLoadingArtists.collectAsState()
 
-    companion object {
-        // Used ONLY as a safety net if InnerTube can't be reached - not the
-        // primary source anymore (see loadGenres/loadArtistsForSelectedGenres).
-        val FALLBACK_GENRES = listOf(
-            "Pop", "Hip-Hop", "Rock", "Electronic", "Lo-Fi", "R&B",
-            "Indie", "Chill", "Classical", "Jazz", "Metal", "Bollywood"
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        if (step == 0) {
+            GenrePickerStep(
+                genres = availableGenres,
+                isLoading = isLoadingGenres,
+                selectedGenres = selectedGenres,
+                onToggleGenre = onboardingViewModel::toggleGenre,
+                onContinue = onboardingViewModel::goToArtistStep,
+                onSkip = onboardingViewModel::skipOnboarding,
+                onRetry = onboardingViewModel::retryLoadGenres
+            )
+        } else {
+            ArtistPickerStep(
+                artists = availableArtists,
+                isLoading = isLoadingArtists,
+                selectedArtists = selectedArtists,
+                onToggleArtist = onboardingViewModel::toggleArtist,
+                onBack = onboardingViewModel::goBackToGenreStep,
+                onFinish = onboardingViewModel::finishOnboarding,
+                onSkip = onboardingViewModel::skipOnboarding,
+                onRetry = onboardingViewModel::retryLoadArtists
+            )
+        }
+    }
+}
+
+/** Centered spinner (loading) or "nothing came back" message + Retry button, shared by both steps. */
+@Composable
+private fun LoadingOrEmptyState(isLoading: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        if (isLoading) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Couldn't load suggestions. Check your connection.",
+                    color = Color.Gray,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
+                )
+                TextButton(onClick = onRetry) {
+                    Text("Retry", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenrePickerStep(
+    genres: List<String>,
+    isLoading: Boolean,
+    selectedGenres: Set<String>,
+    onToggleGenre: (String) -> Unit,
+    onContinue: () -> Unit,
+    onSkip: () -> Unit,
+    onRetry: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        OnboardingHeader(
+            title = "What do you want to listen to?",
+            subtitle = "Pick at least ${OnboardingViewModel.MIN_GENRE_SELECTIONS} genres - we'll use these to personalize your Home feed.",
+            onSkip = onSkip
         )
-        val FALLBACK_ARTISTS = listOf(
-            "Taylor Swift", "The Weeknd", "Drake", "Billie Eilish",
-            "Ed Sheeran", "Dua Lipa", "Arijit Singh", "Coldplay",
-            "Imagine Dragons", "Post Malone", "Ariana Grande", "BTS",
-            "Kendrick Lamar", "Adele", "Bruno Mars", "Karan Aujla"
+
+        if (isLoading || genres.isEmpty()) {
+            LoadingOrEmptyState(
+                isLoading = isLoading,
+                onRetry = onRetry,
+                modifier = Modifier.weight(1f).padding(top = 40.dp)
+            )
+        } else {
+            // 3 columns instead of 2 - the real InnerTube genre list is much
+            // longer (30-40+ entries) than the old 12-item hardcoded one, so
+            // a denser grid keeps it scannable instead of one long scroll.
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(genres) { genre ->
+                    SelectableChipCard(
+                        label = genre,
+                        icon = Icons.Default.MusicNote,
+                        isSelected = genre in selectedGenres,
+                        onClick = { onToggleGenre(genre) }
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = onContinue,
+            enabled = selectedGenres.size >= OnboardingViewModel.MIN_GENRE_SELECTIONS,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .height(52.dp)
+        ) {
+            Text(
+                text = "Continue (${selectedGenres.size} selected)",
+                color = Color.Black,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArtistPickerStep(
+    artists: List<String>,
+    isLoading: Boolean,
+    selectedArtists: Set<String>,
+    onToggleArtist: (String) -> Unit,
+    onBack: () -> Unit,
+    onFinish: () -> Unit,
+    onSkip: () -> Unit,
+    onRetry: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        OnboardingHeader(
+            title = "Now pick some artists",
+            subtitle = "Choose at least ${OnboardingViewModel.MIN_ARTIST_SELECTIONS} artists you love.",
+            onSkip = onSkip
         )
 
-        const val MIN_GENRE_SELECTIONS = 3
-        const val MIN_ARTIST_SELECTIONS = 2
-    }
+        if (isLoading || artists.isEmpty()) {
+            LoadingOrEmptyState(
+                isLoading = isLoading,
+                onRetry = onRetry,
+                modifier = Modifier.weight(1f).padding(top = 40.dp)
+            )
+        } else {
+            // Same reasoning as the genre grid - the real artist list (based
+            // on InnerTube search for each genre you picked) is much bigger
+            // than the old fixed 16, so 3 columns keeps it browsable.
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(artists) { artist ->
+                    SelectableChipCard(
+                        label = artist,
+                        icon = Icons.Default.Person,
+                        isSelected = artist in selectedArtists,
+                        onClick = { onToggleArtist(artist) }
+                    )
+                }
+            }
+        }
 
-    private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
-    val availableGenres = _availableGenres.asStateFlow()
-
-    private val _isLoadingGenres = MutableStateFlow(true)
-    val isLoadingGenres = _isLoadingGenres.asStateFlow()
-
-    private val _availableArtists = MutableStateFlow<List<String>>(emptyList())
-    val availableArtists = _availableArtists.asStateFlow()
-
-    private val _isLoadingArtists = MutableStateFlow(false)
-    val isLoadingArtists = _isLoadingArtists.asStateFlow()
-
-    private val _selectedGenres = MutableStateFlow<Set<String>>(emptySet())
-    val selectedGenres = _selectedGenres.asStateFlow()
-
-    private val _selectedArtists = MutableStateFlow<Set<String>>(emptySet())
-    val selectedArtists = _selectedArtists.asStateFlow()
-
-    // step 0 = genre picker, step 1 = artist picker
-    private val _step = MutableStateFlow(0)
-    val step = _step.asStateFlow()
-
-    private val _isComplete = MutableStateFlow(OnboardingPreferences.isCompleted(context))
-    val isComplete = _isComplete.asStateFlow()
-
-    init {
-        loadGenres()
-    }
-
-    private fun loadGenres() {
-        viewModelScope.launch {
-            _isLoadingGenres.value = true
-            val genres = runCatching { InnerTubeMusicService.getGenres() }.getOrNull()
-            _availableGenres.value = if (genres.isNullOrEmpty()) FALLBACK_GENRES else genres
-            _isLoadingGenres.value = false
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
+            TextButton(onClick = onBack, modifier = Modifier.padding(end = 8.dp)) {
+                Text("Back", color = Color.Gray)
+            }
+            Button(
+                onClick = onFinish,
+                enabled = selectedArtists.size >= OnboardingViewModel.MIN_ARTIST_SELECTIONS,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp)
+            ) {
+                Text(
+                    text = "Get Started (${selectedArtists.size} selected)",
+                    color = Color.Black,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
+}
 
-    private fun loadArtistsForSelectedGenres() {
-        viewModelScope.launch {
-            _isLoadingArtists.value = true
-            val artists = runCatching {
-                InnerTubeMusicService.getArtistsForGenres(_selectedGenres.value.toList())
-            }.getOrNull()
-            _availableArtists.value = if (artists.isNullOrEmpty()) FALLBACK_ARTISTS else artists
-            _isLoadingArtists.value = false
+@Composable
+private fun OnboardingHeader(title: String, subtitle: String, onSkip: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 24.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = subtitle,
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+            }
+            TextButton(onClick = onSkip) {
+                Text("Skip", color = Color.Gray)
+            }
         }
     }
+}
 
-    fun retryLoadGenres() = loadGenres()
-    fun retryLoadArtists() = loadArtistsForSelectedGenres()
-
-    fun toggleGenre(genre: String) {
-        _selectedGenres.value = _selectedGenres.value.toMutableSet().apply {
-            if (!add(genre)) remove(genre)
-        }
-    }
-
-    fun toggleArtist(artist: String) {
-        _selectedArtists.value = _selectedArtists.value.toMutableSet().apply {
-            if (!add(artist)) remove(artist)
-        }
-    }
-
-    fun goToArtistStep() {
-        _step.value = 1
-        if (_availableArtists.value.isEmpty()) loadArtistsForSelectedGenres()
-    }
-
-    fun goBackToGenreStep() {
-        _step.value = 0
-    }
-
-    fun finishOnboarding() {
-        OnboardingPreferences.saveSelections(
-            context = context,
-            genres = _selectedGenres.value.toList(),
-            artists = _selectedArtists.value.toList()
-        )
-        _isComplete.value = true
-    }
-
-    fun skipOnboarding() {
-        OnboardingPreferences.markSkipped(context)
-        _isComplete.value = true
-    }
-
-    class Factory(private val context: Context) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return OnboardingViewModel(context.applicationContext) as T
+@Composable
+private fun SelectableChipCard(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface)
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.DarkGray,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = Color.Black,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            }
         }
     }
 }
