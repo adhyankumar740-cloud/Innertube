@@ -90,7 +90,28 @@ class JamViewModel(
             if (jamManager.roomCode != null) jamManager.pushPlayPause(false, positionMs)
         }
 
-        jamChatManager.onMessageAdded = { msg -> _messages.value = _messages.value + msg }
+        // DUPLICATE-MESSAGE FIX: a message you send can legitimately reach
+        // this callback twice - once from the live "chat" broadcast (which
+        // JamManager subscribes with receiveOwnBroadcasts = true, so your
+        // own sent message comes back to you same as everyone else's), and
+        // again from attach()'s one-time history SELECT if that query
+        // happens to run/complete around the same time (e.g. you send a
+        // message right after creating/joining a room, before the initial
+        // history load has finished). Before this fix there was no id check
+        // here, so that race showed up as the same chat bubble appearing
+        // twice - looking exactly like "Jam chat isn't working properly".
+        // ORDERING FIX: attach()'s one-time history load (up to 200 past
+        // messages, oldest first) runs concurrently with the live "chat"
+        // broadcast collector - if a brand-new message arrives while older
+        // history is still being appended, appending-to-the-end put it
+        // ABOVE messages that are actually older than it. Sorting by
+        // timestamp on every insert keeps the list chronological regardless
+        // of which source (history vs. live) delivered a given message first.
+        jamChatManager.onMessageAdded = { msg ->
+            if (_messages.value.none { it.id == msg.id }) {
+                _messages.value = (_messages.value + msg).sortedBy { it.timestamp }
+            }
+        }
         jamChatManager.onMessageChanged = { msg ->
             _messages.value = _messages.value.map { if (it.id == msg.id) msg else it }
         }
