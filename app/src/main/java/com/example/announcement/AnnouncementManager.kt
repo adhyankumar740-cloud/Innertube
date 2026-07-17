@@ -16,9 +16,14 @@ data class Announcement(
     val id: String,
     val title: String,
     val message: String,
+    val version: String,
+    val link: String,
     val active: Boolean,
     val updatedAt: Long
-)
+) {
+    /** True when the admin attached a website/update link to this announcement. */
+    val hasLink: Boolean get() = link.isNotBlank()
+}
 
 /**
  * Reads announcements written by the GitHub-Pages-hosted Admin Panel
@@ -61,10 +66,20 @@ class AnnouncementManager(private val context: Context) {
             ?: return null
         val title = snapshot.child("title").getValue(String::class.java) ?: "Announcement"
         val message = snapshot.child("message").getValue(String::class.java) ?: return null
+        val version = snapshot.child("version").getValue(String::class.java) ?: ""
+        val link = snapshot.child("link").getValue(String::class.java) ?: ""
         val active = snapshot.child("active").getValue(Boolean::class.java) ?: true
         val updatedAt = snapshot.child("updatedAt").getValue(Long::class.java) ?: 0L
         if (message.isBlank()) return null
-        return Announcement(id = id, title = title, message = message, active = active, updatedAt = updatedAt)
+        return Announcement(
+            id = id,
+            title = title,
+            message = message,
+            version = version,
+            link = link,
+            active = active,
+            updatedAt = updatedAt
+        )
     }
 
     /**
@@ -84,6 +99,14 @@ class AnnouncementManager(private val context: Context) {
         val alreadyShownToday = lastShownDay == today
         return if (alreadyShownToday) null else announcement
     }
+
+    /**
+     * Fetches the current announcement regardless of whether one has already
+     * been shown as a popup today. Used by the Settings screen's "What's
+     * New" section, which should always be able to show the latest update
+     * (and its website/download link) on demand, not just once a day.
+     */
+    suspend fun getLatestAnnouncement(): Announcement? = fetchCurrent()
 
     fun markShown(announcement: Announcement) {
         prefs.edit()
