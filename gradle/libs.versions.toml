@@ -49,6 +49,7 @@ ktor = "3.5.0"
 brotli = "0.1.2"
 desugaring = "2.1.5"
 timber = "5.0.1"
+supabase = "3.1.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -120,6 +121,9 @@ ktor-client-encoding = { group = "io.ktor", name = "ktor-client-encoding", versi
 brotli = { group = "org.brotli", name = "dec", version.ref = "brotli" }
 desugaring = { group = "com.android.tools", name = "desugar_jdk_libs_nio", version.ref = "desugaring" }
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+supabase-bom = { group = "io.github.jan-tennert.supabase", name = "bom", version.ref = "supabase" }
+supabase-postgrest = { group = "io.github.jan-tennert.supabase", name = "postgrest-kt" }
+supabase-realtime = { group = "io.github.jan-tennert.supabase", name = "realtime-kt" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
