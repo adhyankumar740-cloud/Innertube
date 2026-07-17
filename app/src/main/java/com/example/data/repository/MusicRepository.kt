@@ -205,24 +205,34 @@ class MusicRepository(
         // to scroll to) even though tap-to-toggle-play still worked fine on that
         // single item. Fetching several varied terms in parallel and merging the
         // results gives the pager a real multi-page feed to swipe through.
+        val profile = if (term == "top hit" || term == "trending hit") getPersonalizationProfile() else null
+        val personalizedTerms = profile?.let {
+            (
+                it.topGenres.map { g -> "$g music video" } +
+                it.topArtists.map { a -> a } +
+                it.topSearchQueries
+            ).distinct().take(6)
+        } ?: emptyList()
+
+        // PERSONALIZATION FIX: previously all 8 generic default terms were
+        // always mixed in alongside the (at most 5) personalized ones, and the
+        // combined pool was flattened into one flat .shuffled() - so even when
+        // a user had strong history, generic chart terms usually outnumbered
+        // their own taste 8:5 in the pool AND the final random shuffle threw
+        // away any signal about which track came from which term anyway. The
+        // feed was "personalized" in name only. Now: fewer generic terms are
+        // used once we actually have a taste profile (just enough for variety/
+        // discovery), and results are tagged by source so the feed can be
+        // ordered with the user's own taste surfaced first (see below),
+        // instead of everything being shuffled into one indistinguishable pile.
+        val defaultTerms = listOf("pop hits", "hip hop", "dance music", "top 40", "rock hits", "trending music", "viral songs", "rnb hits")
+        val usedDefaultTerms = if (personalizedTerms.isNotEmpty()) defaultTerms.take(3) else defaultTerms
         val searchTerms = if (term == "top hit" || term == "trending hit") {
-            // Personalization: put the user's own top genres/artists (from
-            // listening + search history) at the front of the term pool, ahead
-            // of the generic defaults, so their swipe feed skews toward what
-            // they actually listen to rather than being purely generic charts.
-            // Defaults are always kept too (both as a fallback for brand-new
-            // users with no history yet, and to preserve variety/discovery).
-            val profile = getPersonalizationProfile()
-            val personalizedTerms = (
-                profile.topGenres.map { "$it music video" } +
-                profile.topArtists.map { "$it" } +
-                profile.topSearchQueries
-            ).distinct().take(5)
-            val defaultTerms = listOf("pop hits", "hip hop", "dance music", "top 40", "rock hits", "trending music", "viral songs", "rnb hits")
-            (personalizedTerms + defaultTerms).distinct()
+            (personalizedTerms + usedDefaultTerms).distinct()
         } else {
             listOf(term)
         }
+        val personalizedTermSet = personalizedTerms.toSet()
 
         try {
             val results = coroutineScope {
@@ -230,6 +240,7 @@ class MusicRepository(
                     async {
                         try {
                             apiService.search(term = t, media = "musicVideo", entity = "musicVideo", limit = 40).results
+                                .map { it to (t in personalizedTermSet) }
                         } catch (e: Exception) {
                             emptyList()
                         }
@@ -237,11 +248,21 @@ class MusicRepository(
                 }.awaitAll()
             }.flatten()
 
-            val tracks = results
-                .filter { !it.previewUrl.isNullOrEmpty() }
-                .map { it.toTrack(isVideo = true) }
-                .distinctBy { it.id }
-                .shuffled()
+            val seen = mutableSetOf<Long>()
+            val personalizedTracks = mutableListOf<Track>()
+            val discoveryTracks = mutableListOf<Track>()
+            results.forEach { (result, isPersonalized) ->
+                if (result.previewUrl.isNullOrEmpty()) return@forEach
+                val track = result.toTrack(isVideo = true)
+                if (!seen.add(track.id)) return@forEach
+                if (isPersonalized) personalizedTracks.add(track) else discoveryTracks.add(track)
+            }
+
+            // Own-taste tracks first (shuffled among themselves so it's not the
+            // same order every load), generic-discovery tracks after - a real
+            // personalization bias instead of one big random shuffle that
+            // erases the distinction entirely.
+            val tracks = personalizedTracks.shuffled() + discoveryTracks.shuffled()
 
             val enrichedTracks = tracks.map { track ->
                 val localEntity = savedTrackDao.getSavedTrackById(track.id)
