@@ -2,6 +2,10 @@ package com.example.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.PowerManager
 import android.util.Log
@@ -689,9 +693,73 @@ class MusicPlayer(
                     // Nothing is going to start playing, so nothing more to cover.
                     releaseTransitionWakeLock()
                 }
+            } catch (e: Exception) {
+                // ROOT-CAUSE FIX ("song ends while app is minimized, next
+                // song just never starts - looks like playback stopped"):
+                // this whole block used to have NO catch. provider(...)
+                // does real network I/O (recommendation lookup, then a
+                // relay/stream resolve) which throws far more often right
+                // after the app is minimized and the screen turns off -
+                // exactly when a background network blip or a brief Doze/
+                // battery-saver restriction is most likely. With no catch,
+                // that exception just killed THIS coroutine silently:
+                // _isResolvingAutoplay never even reset, no error shown, no
+                // retry, and - critically - advance(1) never ran again, so
+                // nothing ever played next. If it's specifically a
+                // connectivity problem, wait for the network to actually
+                // come back and retry automatically instead of giving up;
+                // otherwise show the same error as the "no recommendation
+                // found" case above and stop waiting.
+                Log.w("MusicPlayer", "triggerAutoplay failed for ${current.title}", e)
+                if (!isOnline()) {
+                    waitForNetworkThenRetry()
+                } else {
+                    _playbackError.value = "Agla gaana load nahi ho paaya - dobara try kar rahe hain."
+                    registerPlaybackFailureAndMaybeStop()
+                }
             } finally {
                 _isResolvingAutoplay.value = false
             }
+        }
+    }
+
+    private fun isOnline(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private var reconnectCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Holds the transition wake lock and waits for connectivity to actually
+     *  come back (instead of repeatedly failing/counting against the give-up
+     *  limit) before retrying the next-track advance - covers the common
+     *  "screen just turned off, network briefly cut out" case that used to
+     *  need reopening the app to recover from. */
+    private fun waitForNetworkThenRetry() {
+        if (reconnectCallback != null) return // already waiting on one
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: run {
+            advance(1)
+            return
+        }
+        acquireTransitionWakeLock()
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                try { cm.unregisterNetworkCallback(this) } catch (e: Exception) { /* already gone */ }
+                reconnectCallback = null
+                scope.launch { advance(1) }
+            }
+        }
+        reconnectCallback = callback
+        try {
+            cm.registerNetworkCallback(request, callback)
+        } catch (e: Exception) {
+            reconnectCallback = null
+            releaseTransitionWakeLock()
         }
     }
 
@@ -707,6 +775,16 @@ class MusicPlayer(
     }
 
     private fun registerPlaybackFailureAndMaybeStop() {
+        // Same connectivity check as triggerAutoplay's catch block: a resolve
+        // failure caused by having no network *right now* (common the moment
+        // the screen turns off) isn't a broken track - don't count it against
+        // the 3-strikes give-up limit, just wait for the network and retry.
+        if (!isOnline()) {
+            _isBuffering.value = false
+            _isPlaying.value = false
+            waitForNetworkThenRetry()
+            return
+        }
         consecutivePlaybackFailures++
         if (consecutivePlaybackFailures >= maxConsecutivePlaybackFailures) {
             consecutivePlaybackFailures = 0
@@ -1150,6 +1228,11 @@ class MusicPlayer(
         stopProgressTracker()
         releaseTransitionWakeLock()
         cancelBufferingWatchdog()
+        reconnectCallback?.let { cb ->
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            try { cm?.unregisterNetworkCallback(cb) } catch (e: Exception) { /* already gone */ }
+        }
+        reconnectCallback = null
         preloadJob?.cancel()
         autoplayPreloadJob?.cancel()
         pendingAutoplayTrack = null
