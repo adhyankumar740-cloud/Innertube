@@ -49,7 +49,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -390,7 +389,6 @@ fun TrendingBannerCard(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .size(96.dp)
-                    .graphicsLayer { rotationZ = 8f }
                     .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.background)
                     .padding(3.dp)
