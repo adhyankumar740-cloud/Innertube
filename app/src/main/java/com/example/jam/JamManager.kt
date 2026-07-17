@@ -16,6 +16,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 
 /**
  * Real cross-device group listening ("Jam"), backed by **Supabase** (Postgrest +
@@ -166,7 +169,14 @@ class JamManager {
 
     companion object {
         private const val ROOMS_TABLE = "jam_rooms"
+        private val json = Json { ignoreUnknownKeys = true }
     }
+
+    /** Realtime's track()/broadcast() take a JsonObject, not an arbitrary
+     *  @Serializable instance - encode explicitly rather than relying on
+     *  overload resolution to do it for us. */
+    private inline fun <reified T> T.toJsonObject(): JsonObject =
+        json.encodeToJsonElement(this) as JsonObject
 
     private val auth = FirebaseAuth.getInstance()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -374,7 +384,7 @@ class JamManager {
         myPresence = updated
         scope.launch {
             try {
-                ch.track(updated)
+                ch.track(updated.toJsonObject())
             } catch (e: Exception) {
                 onLog?.invoke("Jam typing error: ${e.message}")
             }
@@ -385,7 +395,7 @@ class JamManager {
         val ch = channel ?: return
         scope.launch {
             try {
-                ch.broadcast(event = "playback", message = payload)
+                ch.broadcast(event = "playback", message = payload.toJsonObject())
             } catch (e: Exception) {
                 onLog?.invoke("Jam sync error: ${e.message}")
             }
@@ -451,7 +461,7 @@ class JamManager {
         ch.subscribe(blockUntilSubscribed = true)
         val presence = ParticipantPresence(uid = uid, name = displayName, avatar = avatar, isHost = isHostFlag)
         myPresence = presence
-        ch.track(presence)
+        ch.track(presence.toJsonObject())
     }
 
     private fun handleIncomingPlayback(payload: PlaybackBroadcast, myUid: String) {
