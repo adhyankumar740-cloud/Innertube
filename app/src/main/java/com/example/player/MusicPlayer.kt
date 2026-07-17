@@ -166,6 +166,41 @@ class MusicPlayer(
     private val _isResolvingAutoplay = MutableStateFlow(false)
     val isResolvingAutoplay: StateFlow<Boolean> = _isResolvingAutoplay.asStateFlow()
 
+    // Sleep timer: value is the epoch-millis moment playback should auto-pause,
+    // or null when no timer is running. Exposed as an end-time (not a raw
+    // countdown) so the UI can recompute "time remaining" itself on every
+    // recomposition without this StateFlow needing to tick every second.
+    private val _sleepTimerEndsAt = MutableStateFlow<Long?>(null)
+    val sleepTimerEndsAt: StateFlow<Long?> = _sleepTimerEndsAt.asStateFlow()
+    private var sleepTimerJob: Job? = null
+
+    private val _playbackSpeed = MutableStateFlow(1.0f)
+    val playbackSpeed: StateFlow<Float> = _playbackSpeed.asStateFlow()
+
+    /** Starts (or replaces) the sleep timer. Pauses playback when it elapses - does not stop/dismiss, so resuming just needs a tap on Play. */
+    fun setSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        val endsAt = System.currentTimeMillis() + minutes * 60_000L
+        _sleepTimerEndsAt.value = endsAt
+        sleepTimerJob = scope.launch {
+            delay(minutes * 60_000L)
+            pause()
+            _sleepTimerEndsAt.value = null
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _sleepTimerEndsAt.value = null
+    }
+
+    /** 1.0 = normal speed. Pitch is left uncorrected (matches ExoPlayer's default PlaybackParameters behaviour). */
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed
+        runOnController { it.setPlaybackSpeed(speed) }
+    }
+
     private val _playbackError = MutableStateFlow<String?>(null)
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
