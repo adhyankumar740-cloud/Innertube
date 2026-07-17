@@ -60,15 +60,6 @@ class SamplesViewModel(
         }
     }
 
-    fun toggleDownload(track: Track) {
-        viewModelScope.launch {
-            repository.toggleDownload(track)
-            _samples.value = _samples.value.map {
-                if (it.id == track.id) it.copy(isDownloaded = !it.isDownloaded) else it
-            }
-        }
-    }
-
     /**
      * "Play Full Song" button - finds the best-matching YouTube video for this
      * sample's title/artist and streams its audio directly through the app's
