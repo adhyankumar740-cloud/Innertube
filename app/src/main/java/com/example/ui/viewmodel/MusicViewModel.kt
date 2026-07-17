@@ -52,6 +52,11 @@ class MusicViewModel(
     private val _homeTracks = MutableStateFlow<List<Track>>(emptyList())
     val homeTracks = _homeTracks.asStateFlow()
 
+    // Recent search queries (most recent first, deduped) - shown on the
+    // Search screen below the search box whenever the query box is empty.
+    private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
+    val searchHistory = _searchHistory.asStateFlow()
+
     // "Keep Listening" - live, always reflects your latest plays (no manual refresh needed).
     val keepListening: StateFlow<List<Track>> = repository.getKeepListening()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -83,6 +88,7 @@ class MusicViewModel(
     init {
         // Load initial home screen content
         fetchHomeRecommendations()
+        loadSearchHistory()
 
         // Autoplay: YouTube's relatedToVideoId was deprecated in 2023, so this is
         // an artist/genre-based approximation rather than a true "related videos" call.
@@ -145,7 +151,10 @@ class MusicViewModel(
                 _isSearching.value = true
                 // Log search history for personalization. Fire-and-forget on
                 // the same scope: this must never block/slow the actual search.
-                launch { repository.recordSearchQuery(query) }
+                launch {
+                    repository.recordSearchQuery(query)
+                    loadSearchHistory()
+                }
                 repository.searchTracks(query).collectLatest { outcome ->
                     when (outcome) {
                         is SearchOutcome.Success -> {
@@ -197,6 +206,21 @@ class MusicViewModel(
         val query = _searchQuery.value
         if (query.trim().isNotEmpty()) {
             _retrySearchTrigger.tryEmit(query)
+        }
+    }
+
+    /** Refreshes [searchHistory] from local storage. */
+    fun loadSearchHistory() {
+        viewModelScope.launch {
+            _searchHistory.value = repository.getRecentSearchQueries(20)
+        }
+    }
+
+    /** "Clear all" on the Search screen's recent-searches list. */
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            repository.clearSearchHistory()
+            _searchHistory.value = emptyList()
         }
     }
 
