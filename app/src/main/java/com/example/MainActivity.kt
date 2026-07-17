@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,6 +77,7 @@ import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SamplesScreen
+import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.YouTubeLoginScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthViewModel
@@ -363,6 +365,23 @@ fun MainAppLayout(
                 )
 
                 NavigationBarItem(
+                    selected = selectedTab == "search",
+                    onClick = {
+                        musicViewModel.selectTab("search")
+                        samplesViewModel.playerManager.pause()
+                    },
+                    icon = { Icon(Icons.Default.Search, contentDescription = "Search tab", modifier = Modifier.size(24.dp)) },
+                    label = { Text("Search", style = MaterialTheme.typography.labelMedium) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.Black,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        indicatorColor = MaterialTheme.colorScheme.primary,
+                        unselectedIconColor = Color.Gray,
+                        unselectedTextColor = Color.Gray
+                    )
+                )
+
+                NavigationBarItem(
                     selected = selectedTab == "samples",
                     onClick = { 
                         musicViewModel.selectTab("samples")
@@ -465,7 +484,13 @@ fun MainAppLayout(
                 }
                 Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                     when (selectedTab) {
-                        "home" -> HomeScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
+                        "home" -> HomeScreen(
+                            musicViewModel = musicViewModel,
+                            authViewModel = authViewModel,
+                            playlistViewModel = playlistViewModel,
+                            onSearchClick = { musicViewModel.selectTab("search") }
+                        )
+                        "search" -> SearchScreen(musicViewModel = musicViewModel, playlistViewModel = playlistViewModel)
                         "samples" -> SamplesScreen(samplesViewModel = samplesViewModel)
                         "jam" -> JamScreen(jamViewModel = jamViewModel, authViewModel = authViewModel)
                         "library" -> LibraryScreen(musicViewModel = musicViewModel, authViewModel = authViewModel, playlistViewModel = playlistViewModel)
