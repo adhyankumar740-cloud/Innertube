@@ -12,7 +12,7 @@
 --  - Realtime *Broadcast* (not Postgres Changes) is what actually delivers
 --    instant playback/chat updates to other devices - this table is for
 --    PERSISTENCE + "what's the current state" when a guest joins, not for the
---    live sync path itself. That keeps latency low (no DB replication lag on
+--    live sync path itself. That keeps latency low (no DB repliation lag on
 --    the hot path) while still surviving reconnects.
 --  - Participants are NOT a table - they're tracked with Supabase Realtime
 --    Presence (see JamManager.kt), which - like Firebase's onDisconnect() -
