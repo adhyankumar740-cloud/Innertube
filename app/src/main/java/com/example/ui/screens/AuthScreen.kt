@@ -2,12 +2,8 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -149,16 +145,7 @@ fun AuthScreen(
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                AnimatedContent(
-                    targetState = mode,
-                    label = "auth_mode",
-                    contentAlignment = Alignment.TopCenter,
-                    transitionSpec = {
-                        (fadeIn(animationSpec = tween(220, delayMillis = 90)) togetherWith
-                            fadeOut(animationSpec = tween(90)))
-                            .using(SizeTransform(clip = true))
-                    }
-                ) { current ->
+                AnimatedContent(targetState = mode, label = "auth_mode") { current ->
                     when (current) {
                         AuthMode.SIGN_IN -> SignInContent(
                             authViewModel = authViewModel,
@@ -271,89 +258,101 @@ private fun SignInContent(
     var password by remember { mutableStateOf("") }
     val isLoading = uiState is AuthUiState.Loading
 
-    Text(text = "Welcome Back", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-    Text(
-        text = "Sign in with your User ID and password",
-        fontSize = 12.sp,
-        color = Color.Gray,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(top = 4.dp)
-    )
-    Spacer(modifier = Modifier.height(24.dp))
-
-    ErrorOrInfoBanner(uiState)
-
-    OutlinedTextField(
-        value = userId,
-        onValueChange = { userId = it },
-        label = { Text("User ID") },
-        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signin_userid_field")
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-    OutlinedTextField(
-        value = password,
-        onValueChange = { password = it },
-        label = { Text("Password") },
-        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signin_password_field")
-    )
-
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+    // NOTE: AnimatedContent hosts each mode's content in its own internal Box
+    // (needed so it can crossfade between states), not a Column - so every
+    // element emitted directly into this function was being stacked on top
+    // of the others instead of flowing top-to-bottom, e.g. the Sign In button
+    // rendering right on top of the text fields and the "Forgot" links. Every
+    // *Content composable below needs its own explicit Column for exactly
+    // this reason - see SignUpContent/ForgotPasswordContent/ForgotUserIdContent.
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        TextButton(
-            onClick = onGoToForgotUserId,
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 4.dp)
+        Text(text = "Welcome Back", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(
+            text = "Sign in with your User ID and password",
+            fontSize = 12.sp,
+            color = Color.Gray,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        ErrorOrInfoBanner(uiState)
+
+        OutlinedTextField(
+            value = userId,
+            onValueChange = { userId = it },
+            label = { Text("User ID") },
+            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signin_userid_field")
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signin_password_field")
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                "Forgot User ID?",
-                color = Color.Gray,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            TextButton(
+                onClick = onGoToForgotUserId,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Text(
+                    "Forgot User ID?",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TextButton(
+                onClick = onGoToForgotPassword,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                Text(
+                    "Forgot Password?",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End
+                )
+            }
         }
-        TextButton(
-            onClick = onGoToForgotPassword,
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 4.dp)
-        ) {
-            Text(
-                "Forgot Password?",
-                color = Color.Gray,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End
-            )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        PrimaryButton(text = "Sign In", isLoading = isLoading, testTag = "signin_button") {
+            authViewModel.signIn(userId, password)
         }
-    }
 
-    Spacer(modifier = Modifier.height(8.dp))
-    PrimaryButton(text = "Sign In", isLoading = isLoading, testTag = "signin_button") {
-        authViewModel.signIn(userId, password)
-    }
-
-    Spacer(modifier = Modifier.height(14.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("New here?", color = Color.Gray, fontSize = 12.sp)
-        TextButton(onClick = onGoToSignUp, modifier = Modifier.testTag("go_to_signup_button")) {
-            Text("Create an account", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("New here?", color = Color.Gray, fontSize = 12.sp)
+            TextButton(onClick = onGoToSignUp, modifier = Modifier.testTag("go_to_signup_button")) {
+                Text("Create an account", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
         }
-    }
 
-    Spacer(modifier = Modifier.height(4.dp))
-    TextButton(onClick = onGuestLogin, modifier = Modifier.testTag("guest_login_button")) {
-        Text("Continue as Guest", color = Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
+        TextButton(onClick = onGuestLogin, modifier = Modifier.testTag("guest_login_button")) {
+            Text("Continue as Guest", color = Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -369,73 +368,78 @@ private fun SignUpContent(
     var confirmPassword by remember { mutableStateOf("") }
     val isLoading = uiState is AuthUiState.Loading
 
-    Text(text = "Create Your Account", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-    Text(
-        text = "Pick a unique User ID - this is what you'll log in with",
-        fontSize = 12.sp,
-        color = Color.Gray,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(top = 4.dp)
-    )
-    Spacer(modifier = Modifier.height(20.dp))
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = "Create Your Account", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(
+            text = "Pick a unique User ID - this is what you'll log in with",
+            fontSize = 12.sp,
+            color = Color.Gray,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Spacer(modifier = Modifier.height(20.dp))
 
-    ErrorOrInfoBanner(uiState)
+        ErrorOrInfoBanner(uiState)
 
-    OutlinedTextField(
-        value = userId,
-        onValueChange = { userId = it },
-        label = { Text("User ID") },
-        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signup_userid_field")
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-    OutlinedTextField(
-        value = recoveryEmail,
-        onValueChange = { recoveryEmail = it },
-        label = { Text("Recovery Email") },
-        leadingIcon = { Icon(Icons.Default.MailOutline, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signup_email_field")
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-    OutlinedTextField(
-        value = password,
-        onValueChange = { password = it },
-        label = { Text("Password") },
-        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signup_password_field")
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-    OutlinedTextField(
-        value = confirmPassword,
-        onValueChange = { confirmPassword = it },
-        label = { Text("Confirm Password") },
-        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        colors = authFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("signup_confirm_password_field")
-    )
+        OutlinedTextField(
+            value = userId,
+            onValueChange = { userId = it },
+            label = { Text("User ID") },
+            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signup_userid_field")
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = recoveryEmail,
+            onValueChange = { recoveryEmail = it },
+            label = { Text("Recovery Email") },
+            leadingIcon = { Icon(Icons.Default.MailOutline, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signup_email_field")
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signup_password_field")
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = confirmPassword,
+            onValueChange = { confirmPassword = it },
+            label = { Text("Confirm Password") },
+            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            colors = authFieldColors(),
+            modifier = Modifier.fillMaxWidth().testTag("signup_confirm_password_field")
+        )
 
-    Spacer(modifier = Modifier.height(20.dp))
-    PrimaryButton(text = "Create Account", isLoading = isLoading, testTag = "signup_button") {
-        authViewModel.signUp(userId, password, confirmPassword, recoveryEmail)
-    }
+        Spacer(modifier = Modifier.height(20.dp))
+        PrimaryButton(text = "Create Account", isLoading = isLoading, testTag = "signup_button") {
+            authViewModel.signUp(userId, password, confirmPassword, recoveryEmail)
+        }
 
-    Spacer(modifier = Modifier.height(14.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Already have an account?", color = Color.Gray, fontSize = 12.sp)
-        TextButton(onClick = onGoToSignIn, modifier = Modifier.testTag("go_to_signin_button")) {
-            Text("Sign in", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Already have an account?", color = Color.Gray, fontSize = 12.sp)
+            TextButton(onClick = onGoToSignIn, modifier = Modifier.testTag("go_to_signin_button")) {
+                Text("Sign in", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -451,78 +455,83 @@ private fun ForgotPasswordContent(
     var newPassword by remember { mutableStateOf("") }
     val isLoading = uiState is AuthUiState.Loading
 
-    if (uiState is AuthUiState.PasswordResetSuccess) {
-        Text(text = "Password Updated", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (uiState is AuthUiState.PasswordResetSuccess) {
+            Text(text = "Password Updated", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+                text = "Your password was changed and you're signed in.",
+                fontSize = 12.sp,
+                color = Color.Gray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
+            )
+            return@Column
+        }
+
+        val codeSent = uiState is AuthUiState.PasswordResetCodeSent
+
+        Text(text = "Reset Password", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Text(
-            text = "Your password was changed and you're signed in.",
+            text = if (!codeSent) "Enter your User ID and we'll email a reset code to your recovery address"
+            else "Enter the code we emailed you and choose a new password",
             fontSize = 12.sp,
             color = Color.Gray,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
-        )
-        return
-    }
-
-    val codeSent = uiState is AuthUiState.PasswordResetCodeSent
-
-    Text(text = "Reset Password", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-    Text(
-        text = if (!codeSent) "Enter your User ID and we'll email a reset code to your recovery address"
-        else "Enter the code we emailed you and choose a new password",
-        fontSize = 12.sp,
-        color = Color.Gray,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(top = 4.dp)
-    )
-    Spacer(modifier = Modifier.height(20.dp))
-
-    ErrorOrInfoBanner(uiState)
-
-    if (!codeSent) {
-        OutlinedTextField(
-            value = userId,
-            onValueChange = { userId = it },
-            label = { Text("User ID") },
-            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
-            singleLine = true,
-            colors = authFieldColors(),
-            modifier = Modifier.fillMaxWidth().testTag("forgot_password_userid_field")
+            modifier = Modifier.padding(top = 4.dp)
         )
         Spacer(modifier = Modifier.height(20.dp))
-        PrimaryButton(text = "Send Reset Code", isLoading = isLoading, testTag = "send_reset_code_button") {
-            authViewModel.requestPasswordReset(userId)
-        }
-    } else {
-        OutlinedTextField(
-            value = code,
-            onValueChange = { code = it },
-            label = { Text("6-digit code") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            colors = authFieldColors(),
-            modifier = Modifier.fillMaxWidth().testTag("reset_code_field")
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = newPassword,
-            onValueChange = { newPassword = it },
-            label = { Text("New Password") },
-            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            colors = authFieldColors(),
-            modifier = Modifier.fillMaxWidth().testTag("new_password_field")
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryButton(text = "Update Password", isLoading = isLoading, testTag = "confirm_reset_button") {
-            authViewModel.confirmPasswordReset(code, newPassword)
-        }
-    }
 
-    Spacer(modifier = Modifier.height(14.dp))
-    TextButton(onClick = onBackToSignIn, modifier = Modifier.testTag("back_to_signin_button")) {
-        Text("Back to Sign In", color = Color.Gray, fontSize = 12.sp)
+        ErrorOrInfoBanner(uiState)
+
+        if (!codeSent) {
+            OutlinedTextField(
+                value = userId,
+                onValueChange = { userId = it },
+                label = { Text("User ID") },
+                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray) },
+                singleLine = true,
+                colors = authFieldColors(),
+                modifier = Modifier.fillMaxWidth().testTag("forgot_password_userid_field")
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            PrimaryButton(text = "Send Reset Code", isLoading = isLoading, testTag = "send_reset_code_button") {
+                authViewModel.requestPasswordReset(userId)
+            }
+        } else {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it },
+                label = { Text("6-digit code") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                colors = authFieldColors(),
+                modifier = Modifier.fillMaxWidth().testTag("reset_code_field")
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = newPassword,
+                onValueChange = { newPassword = it },
+                label = { Text("New Password") },
+                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color.Gray) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                colors = authFieldColors(),
+                modifier = Modifier.fillMaxWidth().testTag("new_password_field")
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            PrimaryButton(text = "Update Password", isLoading = isLoading, testTag = "confirm_reset_button") {
+                authViewModel.confirmPasswordReset(code, newPassword)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        TextButton(onClick = onBackToSignIn, modifier = Modifier.testTag("back_to_signin_button")) {
+            Text("Back to Sign In", color = Color.Gray, fontSize = 12.sp)
+        }
     }
 }
 
@@ -536,75 +545,80 @@ private fun ForgotUserIdContent(
     var code by remember { mutableStateOf("") }
     val isLoading = uiState is AuthUiState.Loading
 
-    if (uiState is AuthUiState.UserIdRecovered) {
-        Text(text = "We Found It!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (uiState is AuthUiState.UserIdRecovered) {
+            Text(text = "We Found It!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+                text = "Your User ID is:",
+                fontSize = 12.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                text = uiState.userId,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(vertical = 12.dp).testTag("recovered_user_id")
+            )
+            PrimaryButton(text = "Continue to Sign In", isLoading = false, testTag = "recovered_continue_button") {
+                onBackToSignIn(uiState.userId)
+            }
+            return@Column
+        }
+
+        val codeSent = uiState is AuthUiState.UserIdRecoveryCodeSent
+
+        Text(text = "Find Your User ID", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Text(
-            text = "Your User ID is:",
+            text = if (!codeSent) "Enter your recovery email and we'll send a verification code"
+            else "Enter the code we emailed you",
             fontSize = 12.sp,
             color = Color.Gray,
-            modifier = Modifier.padding(top = 8.dp)
-        )
-        Text(
-            text = uiState.userId,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(vertical = 12.dp).testTag("recovered_user_id")
-        )
-        PrimaryButton(text = "Continue to Sign In", isLoading = false, testTag = "recovered_continue_button") {
-            onBackToSignIn(uiState.userId)
-        }
-        return
-    }
-
-    val codeSent = uiState is AuthUiState.UserIdRecoveryCodeSent
-
-    Text(text = "Find Your User ID", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-    Text(
-        text = if (!codeSent) "Enter your recovery email and we'll send a verification code"
-        else "Enter the code we emailed you",
-        fontSize = 12.sp,
-        color = Color.Gray,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(top = 4.dp)
-    )
-    Spacer(modifier = Modifier.height(20.dp))
-
-    ErrorOrInfoBanner(uiState)
-
-    if (!codeSent) {
-        OutlinedTextField(
-            value = recoveryEmail,
-            onValueChange = { recoveryEmail = it },
-            label = { Text("Recovery Email") },
-            leadingIcon = { Icon(Icons.Default.MailOutline, contentDescription = null, tint = Color.Gray) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            colors = authFieldColors(),
-            modifier = Modifier.fillMaxWidth().testTag("forgot_userid_email_field")
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
         )
         Spacer(modifier = Modifier.height(20.dp))
-        PrimaryButton(text = "Send Code", isLoading = isLoading, testTag = "send_userid_code_button") {
-            authViewModel.requestUserIdRecovery(recoveryEmail)
-        }
-    } else {
-        OutlinedTextField(
-            value = code,
-            onValueChange = { code = it },
-            label = { Text("6-digit code") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            colors = authFieldColors(),
-            modifier = Modifier.fillMaxWidth().testTag("userid_recovery_code_field")
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryButton(text = "Verify Code", isLoading = isLoading, testTag = "confirm_userid_recovery_button") {
-            authViewModel.confirmUserIdRecovery(code)
-        }
-    }
 
-    Spacer(modifier = Modifier.height(14.dp))
-    TextButton(onClick = { onBackToSignIn("") }, modifier = Modifier.testTag("back_to_signin_from_userid_button")) {
-        Text("Back to Sign In", color = Color.Gray, fontSize = 12.sp)
+        ErrorOrInfoBanner(uiState)
+
+        if (!codeSent) {
+            OutlinedTextField(
+                value = recoveryEmail,
+                onValueChange = { recoveryEmail = it },
+                label = { Text("Recovery Email") },
+                leadingIcon = { Icon(Icons.Default.MailOutline, contentDescription = null, tint = Color.Gray) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                colors = authFieldColors(),
+                modifier = Modifier.fillMaxWidth().testTag("forgot_userid_email_field")
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            PrimaryButton(text = "Send Code", isLoading = isLoading, testTag = "send_userid_code_button") {
+                authViewModel.requestUserIdRecovery(recoveryEmail)
+            }
+        } else {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it },
+                label = { Text("6-digit code") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                colors = authFieldColors(),
+                modifier = Modifier.fillMaxWidth().testTag("userid_recovery_code_field")
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            PrimaryButton(text = "Verify Code", isLoading = isLoading, testTag = "confirm_userid_recovery_button") {
+                authViewModel.confirmUserIdRecovery(code)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        TextButton(onClick = { onBackToSignIn("") }, modifier = Modifier.testTag("back_to_signin_from_userid_button")) {
+            Text("Back to Sign In", color = Color.Gray, fontSize = 12.sp)
+        }
     }
 }
