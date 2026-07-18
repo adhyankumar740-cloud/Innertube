@@ -480,47 +480,65 @@ class MusicRepository(
         excludeIds: Set<Long>,
         recentTracks: List<Track> = emptyList()
     ): Track? = withContext(Dispatchers.IO) {
-        try {
-            val genre = resolveGenre(currentTrack)
-            val excludeKeys = (recentTracks + currentTrack).map { normalizedSongKey(it) }.toSet()
+        val genre = resolveGenre(currentTrack)
+        val excludeKeys = (recentTracks + currentTrack).map { normalizedSongKey(it) }.toSet()
 
-            // Genre is a hard requirement for Auto-Next, so every query below is
-            // genre-qualified - "style" match is never traded away for personalization.
-            // What history *does* influence is which genre-matching song gets picked:
-            // if the user has a favorite artist (from search/listening history) who
-            // also fits this genre, that artist's genre-matching songs are tried first,
-            // ahead of the generic "$genre songs" search.
-            val profile = getPersonalizationProfile()
-            val favoriteArtistInGenre = profile.topArtists
-                .firstOrNull { it.isNotBlank() && !it.equals(currentTrack.artist, ignoreCase = true) }
+        // Genre is a hard requirement for Auto-Next, so every query below is
+        // genre-qualified - "style" match is never traded away for personalization.
+        // What history *does* influence is which genre-matching song gets picked:
+        // if the user has a favorite artist (from search/listening history) who
+        // also fits this genre, that artist's genre-matching songs are tried first,
+        // ahead of the generic "$genre songs" search.
+        val profile = getPersonalizationProfile()
+        val favoriteArtistInGenre = profile.topArtists
+            .firstOrNull { it.isNotBlank() && !it.equals(currentTrack.artist, ignoreCase = true) }
 
-            val queries = listOfNotNull(
-                favoriteArtistInGenre?.let { "$it $genre".trim() },
-                "$genre songs".trim(),
-                "${currentTrack.artist} $genre".trim(),
-                currentTrack.artist
-            ).filter { it.isNotBlank() }.distinct()
+        val queries = listOfNotNull(
+            favoriteArtistInGenre?.let { "$it $genre".trim() },
+            "$genre songs".trim(),
+            "${currentTrack.artist} $genre".trim(),
+            currentTrack.artist
+        ).filter { it.isNotBlank() }.distinct()
 
-            for (query in queries) {
-                val candidateTracks: List<Track> = try {
-                    InnerTubeMusicService.search(query = query, limit = 15)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    emptyList()
-                }
+        // NETWORK-RETRY FIX (root cause of "song ends in background and it
+        // just stops instead of moving to the next one"): every search call
+        // below used to catch its own exception and silently fall through as
+        // "no candidates for this query", and the whole function had an outer
+        // catch that did the same - swallow and return null. That meant a
+        // genuine network failure (the exact connectivity blip
+        // waitForNetworkThenRetry() in MusicPlayer exists to cover, right
+        // when the screen turns off) looked IDENTICAL, by the time it
+        // reached triggerAutoplay(), to "no matching song exists for this
+        // genre". MusicPlayer's own network-aware retry (isOnline() check ->
+        // wait for network -> retry) only runs when an exception actually
+        // reaches it - so it never ran for this path; playback just showed
+        // "Koi agla gaana nahi mila" and gave up, even if the network came
+        // back a second later. Now: if EVERY query fails with an exception
+        // (as opposed to succeeding but genuinely finding no match), that's
+        // a real failure and gets rethrown, so the caller can tell the two
+        // cases apart and retry appropriately instead of giving up for good.
+        var lastError: Exception? = null
+        var anyQuerySucceeded = false
 
-                val candidate = candidateTracks
-                    .filter { it.id !in excludeIds && isNormalSongDuration(it) }
-                    .firstOrNull { normalizedSongKey(it) !in excludeKeys }
-                // Carry the resolved genre forward so the next hop in an autoplay
-                // chain doesn't have to re-look it up and doesn't drift genre.
-                if (candidate != null) return@withContext candidate.copy(genre = genre)
+        for (query in queries) {
+            val candidateTracks: List<Track> = try {
+                InnerTubeMusicService.search(query = query, limit = 15).also { anyQuerySucceeded = true }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                lastError = e
+                emptyList()
             }
-            null
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+
+            val candidate = candidateTracks
+                .filter { it.id !in excludeIds && isNormalSongDuration(it) }
+                .firstOrNull { normalizedSongKey(it) !in excludeKeys }
+            // Carry the resolved genre forward so the next hop in an autoplay
+            // chain doesn't have to re-look it up and doesn't drift genre.
+            if (candidate != null) return@withContext candidate.copy(genre = genre)
         }
+
+        if (!anyQuerySucceeded && lastError != null) throw lastError
+        null
     }
 
     /** Fetches lyrics from LRCLIB (free, no key). Returns null if the track isn't found - no placeholder text. */
