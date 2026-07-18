@@ -8,16 +8,19 @@ import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.RealtimeChannel
 import io.github.jan.supabase.realtime.broadcastFlow
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import timber.log.Timber
 import java.time.Instant
 import java.util.UUID
 
@@ -84,7 +87,10 @@ class JamChatManager {
     private inline fun <reified T> T.toJsonObject(): JsonObject =
         json.encodeToJsonElement(this) as JsonObject
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Timber.tag("JamChatManager").e(e, "Unhandled error in Jam chat background task")
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     private var roomCode: String? = null
     private var channel: RealtimeChannel? = null
     private val jobs = mutableListOf<Job>()
@@ -101,14 +107,14 @@ class JamChatManager {
         this.channel = ch
 
         jobs += scope.launch {
-            ch.broadcastFlow<MessageRow>(event = "chat").collect { row ->
-                onMessageAdded?.invoke(row.toChatMessage())
-            }
+            ch.broadcastFlow<MessageRow>(event = "chat")
+                .catch { e -> Timber.tag("JamChatManager").e(e, "Bad chat payload, skipping") }
+                .collect { row -> onMessageAdded?.invoke(row.toChatMessage()) }
         }
         jobs += scope.launch {
-            ch.broadcastFlow<MessageRow>(event = "reaction").collect { row ->
-                onMessageChanged?.invoke(row.toChatMessage())
-            }
+            ch.broadcastFlow<MessageRow>(event = "reaction")
+                .catch { e -> Timber.tag("JamChatManager").e(e, "Bad reaction payload, skipping") }
+                .collect { row -> onMessageChanged?.invoke(row.toChatMessage()) }
         }
 
         // Load recent history once on attach - equivalent to the old
