@@ -23,17 +23,19 @@ import kotlinx.coroutines.launch
  * remove tracks, play a whole playlist through the app's shared [MusicPlayer]
  * queue, and import a playlist from a pasted song list (or M3U-style text).
  *
- * Playlists are also backed up to the cloud (see [PlaylistCloudSync]) keyed
- * by the logged-in account's [userEmail], so deleting/reinstalling the app -
- * or signing into the same account on a different device - brings them all
- * back instead of losing them. This is skipped entirely for Guest sessions
- * (empty email), same as the rest of the app's per-account features.
+ * Playlists are also backed up to the cloud (see [PlaylistCloudSync]) under
+ * the signed-in account's own Supabase Auth session (see AuthViewModel's
+ * User ID + password login), so deleting/reinstalling the app - or signing
+ * into the same account on a different device - brings them all back
+ * instead of losing them. This is skipped entirely for Guest sessions, same
+ * as the rest of the app's per-account features, since a guest has no
+ * Supabase session to own cloud rows with. [isCloudSynced] reflects that.
  */
 class PlaylistViewModel(
     private val repository: MusicRepository,
     private val musicPlayer: MusicPlayer,
     private val cloudSync: PlaylistCloudSync,
-    private val userEmail: StateFlow<String>
+    private val isCloudSynced: StateFlow<Boolean>
 ) : ViewModel() {
 
     val playlists: StateFlow<List<Playlist>> = repository.getPlaylists()
@@ -68,13 +70,13 @@ class PlaylistViewModel(
         }
 
         // Pull down (and push up) cloud playlist backups as soon as a real
-        // account email is available - covers both a fresh login and simply
-        // reopening the app while already logged in. No-ops for Guest
-        // (blank email) and is safe to call more than once (restoreIfNeeded
-        // only actually runs the merge once per email per process).
+        // account session is available - covers both a fresh login and simply
+        // reopening the app while already logged in. No-ops for Guest and is
+        // safe to call more than once (restoreIfNeeded only actually runs the
+        // merge once per session per process).
         viewModelScope.launch {
-            userEmail.collectLatest { email ->
-                if (email.isNotBlank()) cloudSync.restoreIfNeeded(email, repository)
+            isCloudSynced.collectLatest { synced ->
+                if (synced) cloudSync.restoreIfNeeded(repository)
             }
         }
     }
@@ -91,12 +93,10 @@ class PlaylistViewModel(
         viewModelScope.launch {
             val id = repository.createPlaylist(name)
             onCreated(id)
-            val email = userEmail.value
-            if (email.isNotBlank()) {
+            if (isCloudSynced.value) {
                 val remoteId = repository.getRemoteId(id)
                 if (remoteId != null) {
                     cloudSync.uploadPlaylist(
-                        email,
                         Playlist(id = id, name = name.trim().ifBlank { "New Playlist" }, trackCount = 0, createdAt = System.currentTimeMillis(), remoteId = remoteId),
                         emptyList()
                     )
@@ -108,10 +108,9 @@ class PlaylistViewModel(
     fun renamePlaylist(playlistId: Long, newName: String) {
         viewModelScope.launch {
             repository.renamePlaylist(playlistId, newName)
-            val email = userEmail.value
-            if (email.isNotBlank()) {
+            if (isCloudSynced.value) {
                 val remoteId = repository.getRemoteId(playlistId)
-                if (remoteId != null) cloudSync.renamePlaylist(email, remoteId, newName.trim())
+                if (remoteId != null) cloudSync.renamePlaylist(remoteId, newName.trim())
             }
         }
     }
@@ -120,23 +119,22 @@ class PlaylistViewModel(
         viewModelScope.launch {
             // Look up the remoteId BEFORE deleting locally - once the row is
             // gone we have no way left to find it.
-            val email = userEmail.value
-            val remoteId = if (email.isNotBlank()) repository.getRemoteId(playlistId) else null
+            val synced = isCloudSynced.value
+            val remoteId = if (synced) repository.getRemoteId(playlistId) else null
 
             repository.deletePlaylist(playlistId)
             if (_openPlaylistId.value == playlistId) _openPlaylistId.value = null
 
-            if (email.isNotBlank() && remoteId != null) cloudSync.deletePlaylist(email, remoteId)
+            if (synced && remoteId != null) cloudSync.deletePlaylist(remoteId)
         }
     }
 
     fun addTrackToPlaylist(playlistId: Long, track: Track) {
         viewModelScope.launch {
             repository.addTrackToPlaylist(playlistId, track)
-            val email = userEmail.value
-            if (email.isNotBlank()) {
+            if (isCloudSynced.value) {
                 val remoteId = repository.getRemoteId(playlistId)
-                if (remoteId != null) cloudSync.addTrack(email, remoteId, track)
+                if (remoteId != null) cloudSync.addTrack(remoteId, track)
             }
         }
     }
@@ -144,10 +142,9 @@ class PlaylistViewModel(
     fun removeTrackFromPlaylist(playlistId: Long, track: Track) {
         viewModelScope.launch {
             repository.removeTrackFromPlaylist(playlistId, track.id)
-            val email = userEmail.value
-            if (email.isNotBlank()) {
+            if (isCloudSynced.value) {
                 val remoteId = repository.getRemoteId(playlistId)
-                if (remoteId != null) cloudSync.removeTrack(email, remoteId, track.id)
+                if (remoteId != null) cloudSync.removeTrack(remoteId, track.id)
             }
         }
     }
@@ -187,15 +184,13 @@ class PlaylistViewModel(
             _importResult.value = result
             _isImporting.value = false
 
-            val email = userEmail.value
-            if (email.isNotBlank() && result.matchedCount > 0) {
+            if (isCloudSynced.value && result.matchedCount > 0) {
                 val remoteId = repository.getRemoteId(result.playlistId)
                 if (remoteId != null) {
                     // Single current snapshot right after the import finished
                     // (getPlaylistTracks is a live Flow; first() is enough here).
                     val tracks = repository.getPlaylistTracks(result.playlistId).first()
                     cloudSync.uploadPlaylist(
-                        email,
                         Playlist(id = result.playlistId, name = result.playlistName, trackCount = tracks.size, createdAt = System.currentTimeMillis(), remoteId = remoteId),
                         tracks
                     )
@@ -212,11 +207,11 @@ class PlaylistViewModel(
         private val repository: MusicRepository,
         private val musicPlayer: MusicPlayer,
         private val cloudSync: PlaylistCloudSync,
-        private val userEmail: StateFlow<String>
+        private val isCloudSynced: StateFlow<Boolean>
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return PlaylistViewModel(repository, musicPlayer, cloudSync, userEmail) as T
+            return PlaylistViewModel(repository, musicPlayer, cloudSync, isCloudSynced) as T
         }
     }
 }
