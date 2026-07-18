@@ -713,7 +713,21 @@ class MusicPlayer(
         scope.launch {
             _isResolvingAutoplay.value = true
             try {
-                val next = preloadedCandidate ?: run {
+                // HANG FIX (root cause of "song ends naturally and nothing
+                // happens - no error, no next song, just stuck"): every other
+                // network call in this class (relay resolve, retry) is
+                // wrapped in withTimeout - this one wasn't. getAutoplayRecommendation()
+                // does a genre lookup plus several search calls with no
+                // deadline of its own, so if any single one of them ever hung
+                // (bad connection, slow DNS, a stuck request - most likely
+                // right as the app goes to background) this coroutine just
+                // sat there forever: no exception, so the catch block below
+                // never ran, _isResolvingAutoplay never cleared, and nothing
+                // ever played next. withTimeout guarantees this always either
+                // succeeds or throws within 20s, so the catch block's
+                // existing isOnline()-aware retry logic actually gets a
+                // chance to run.
+                val next = preloadedCandidate ?: withTimeout(20_000L) {
                     val excludeIds = (_queue.value.map { it.id } + recentlyPlayedIds).toSet()
                     val recentTracks = _queue.value + recentlyPlayedTracks
                     provider(current, excludeIds, recentTracks)
@@ -964,7 +978,14 @@ class MusicPlayer(
             try {
                 val excludeIds = (_queue.value.map { it.id } + recentlyPlayedIds).toSet()
                 val recentTracks = _queue.value + recentlyPlayedTracks
-                val next = provider(current, excludeIds, recentTracks) ?: return@launch
+                // Same hang-guard as triggerAutoplay() - this runs in the
+                // background so a stuck call here wouldn't freeze playback
+                // directly, but it would mean this speculative candidate
+                // never resolves, silently forcing triggerAutoplay() to fall
+                // through to its own (now timeout-guarded) cold call anyway.
+                val next = withTimeout(20_000L) {
+                    provider(current, excludeIds, recentTracks)
+                } ?: return@launch
                 // Stale if the currently playing track changed while this was
                 // in flight (user skipped/picked something else meanwhile).
                 if (_currentTrack.value?.id != sourceId) return@launch
