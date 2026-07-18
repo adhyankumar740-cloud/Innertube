@@ -56,7 +56,7 @@ fun LibraryScreen(
     modifier: Modifier = Modifier
 ) {
     val username by authViewModel.username.collectAsState()
-    val email by authViewModel.email.collectAsState()
+    val userId by authViewModel.userId.collectAsState()
     val favorites by musicViewModel.favoriteTracks.collectAsState()
 
     var activeTab by remember { mutableStateOf("Favorites") }
@@ -108,7 +108,7 @@ fun LibraryScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = email,
+                            text = if (userId.isNotBlank()) "@$userId" else "Guest session",
                             color = Color.Gray,
                             fontSize = 12.sp
                         )
