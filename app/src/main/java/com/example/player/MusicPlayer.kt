@@ -238,7 +238,21 @@ class MusicPlayer(
     private var relayRetriedForVideoId: String? = null
 
     private var bufferingWatchdogJob: Job? = null
-    private val bufferingTimeoutMs = 12_000L
+    // BUG FIX (root cause of "song buffers then just skips to the next one"):
+    // this was a single 12s timer with NO retry - if a track hadn't reached
+    // STATE_READY within 12s of starting to load (very possible on a cold
+    // relay resolve + a slow/weak connection, which is exactly when buffering
+    // is worst), it was instantly treated as a hard failure and skipped, even
+    // though it was still genuinely loading and would have played fine given
+    // a few more seconds. onPlayerError already retries once before giving up
+    // - the watchdog now does the same instead of skipping on the very first
+    // timeout. 18s per attempt (36s total across both attempts) comfortably
+    // covers a slow cold resolve without making a truly-stuck track hang
+    // forever.
+    private val bufferingTimeoutMs = 18_000L
+    // Mirrors relayRetriedForVideoId's one-retry-then-give-up pattern, but for
+    // the watchdog's own timeout path specifically.
+    private var watchdogRetriedForVideoId: String? = null
 
     // --- Next-track preloading (removes the relay-resolve wait when advancing) ---
     // The relay's /resolve endpoint can be slow on a cold cache (it downloads/
@@ -251,6 +265,22 @@ class MusicPlayer(
     private val preloadedStreamUrls = object : LinkedHashMap<String, String>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 5
     }
+
+    // BANDWIDTH-CONTENTION FIX (part of "buffers right after a song ends"):
+    // preloadNextTrack()/preloadAutoplayCandidate() used to CacheWriter the
+    // ENTIRE next track while the current one was still actively streaming
+    // live. On anything less than a fast, uncontended connection, both
+    // downloads competed for the same bandwidth - which could itself stall
+    // the CURRENTLY playing track, and on a slow link the full-track
+    // prefetch often hadn't finished by the time the track actually ended
+    // anyway, so the transition still had to fall back to live fetching for
+    // the remainder. Capping the prefetch to a fixed amount of audio (~90s
+    // at a typical ~128kbps stream) is enough to let the next track start
+    // and play smoothly the instant it's needed - it finishes far sooner and
+    // takes far less bandwidth away from the track still playing - while
+    // ExoPlayer's own cache-through data source simply fetches the rest live
+    // once that next track actually starts, same as any normal track does.
+    private val preloadCapBytes = 1_500_000L
     private var preloadJob: Job? = null
 
     // AUTOPLAY-GAP FIX (root cause of "song khatam hone ke baad next song
@@ -892,9 +922,13 @@ class MusicPlayer(
                 withContext(Dispatchers.IO) {
                     val dataSource =
                         PlaybackCache.cacheDataSourceFactory(context).createDataSource() as CacheDataSource
+                    val cappedSpec = DataSpec.Builder()
+                        .setUri(Uri.parse(streamUrl))
+                        .setLength(preloadCapBytes)
+                        .build()
                     val cacheWriter = CacheWriter(
                         dataSource,
-                        DataSpec(Uri.parse(streamUrl)),
+                        cappedSpec,
                         /* temporaryBuffer = */ null,
                         /* progressListener = */ null
                     )
@@ -950,9 +984,13 @@ class MusicPlayer(
                 withContext(Dispatchers.IO) {
                     val dataSource =
                         PlaybackCache.cacheDataSourceFactory(context).createDataSource() as CacheDataSource
+                    val cappedSpec = DataSpec.Builder()
+                        .setUri(Uri.parse(streamUrl))
+                        .setLength(preloadCapBytes)
+                        .build()
                     val cacheWriter = CacheWriter(
                         dataSource,
-                        DataSpec(Uri.parse(streamUrl)),
+                        cappedSpec,
                         /* temporaryBuffer = */ null,
                         /* progressListener = */ null
                     )
@@ -1003,6 +1041,7 @@ class MusicPlayer(
 
     private fun playYoutubeTrack(track: Track, autoPlay: Boolean = true) {
         relayRetriedForVideoId = null
+        watchdogRetriedForVideoId = null
         cancelBufferingWatchdog()
         _currentTrack.value = track
         if (!isApplyingRemote) onLocalSongChange?.invoke(track)
@@ -1096,8 +1135,25 @@ class MusicPlayer(
         bufferingWatchdogJob = scope.launch {
             delay(bufferingTimeoutMs)
             if (loadedYoutubeVideoId == videoId && _isBuffering.value && !hasReachedPlayingState) {
-                _isBuffering.value = false
-                registerPlaybackFailureAndMaybeStop()
+                if (watchdogRetriedForVideoId != videoId) {
+                    // First timeout: this is very likely just a slow cold
+                    // resolve/connection, not a broken stream - re-resolve
+                    // (fresh signed URL) and give it one more full window
+                    // before treating it as a real failure.
+                    watchdogRetriedForVideoId = videoId
+                    val track = _currentTrack.value
+                    if (track != null) {
+                        Log.w("MusicPlayer", "Buffering watchdog timed out for $videoId, retrying resolve once before giving up")
+                        retryRelayResolve(track, videoId, catchUp = null)
+                        startBufferingWatchdog(videoId)
+                    }
+                } else {
+                    // Second timeout in a row for the same track - genuinely
+                    // stuck, not just slow. Give up on it the same way a
+                    // second onPlayerError would.
+                    _isBuffering.value = false
+                    registerPlaybackFailureAndMaybeStop()
+                }
             }
         }
     }
