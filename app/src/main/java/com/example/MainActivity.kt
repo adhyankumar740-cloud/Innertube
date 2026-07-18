@@ -76,7 +76,6 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.JamScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingScreen
-import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SamplesScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
@@ -84,7 +83,6 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.JamViewModel
 import com.example.ui.viewmodel.MusicViewModel
-import com.example.ui.viewmodel.OnboardingViewModel
 import com.example.ui.viewmodel.PlaylistViewModel
 import com.example.ui.viewmodel.SamplesViewModel
 
@@ -96,10 +94,6 @@ class MainActivity : ComponentActivity() {
     // Setup all ViewModels cleanly with factories
     private val authViewModel: AuthViewModel by viewModels {
         AuthViewModel.Factory(applicationContext)
-    }
-
-    private val onboardingViewModel: OnboardingViewModel by viewModels {
-        OnboardingViewModel.Factory(applicationContext)
     }
 
     private val musicViewModel: MusicViewModel by viewModels {
@@ -201,7 +195,6 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
                 val isInitializing by authViewModel.isInitializing.collectAsState()
-                val isOnboardingComplete by onboardingViewModel.isComplete.collectAsState()
 
                 when {
                     // Briefly true on cold start while Supabase Auth restores any
@@ -213,9 +206,10 @@ class MainActivity : ComponentActivity() {
                             .background(MaterialTheme.colorScheme.background)
                     )
                     !isLoggedIn -> AuthScreen(authViewModel = authViewModel)
-                    // Shown exactly once, right after the very first login on this
-                    // device (OnboardingPreferences persists completion locally).
-                    !isOnboardingComplete -> OnboardingScreen(onboardingViewModel = onboardingViewModel)
+                    // REMOVED: first-login genre/artist picker (OnboardingScreen) -
+                    // now goes straight from login to the main app. Onboarding
+                    // completion is never checked here anymore, so it can't show
+                    // up even for existing users who never finished/skipped it.
                     else -> MainAppLayout(
                         musicViewModel = musicViewModel,
                         authViewModel = authViewModel,
