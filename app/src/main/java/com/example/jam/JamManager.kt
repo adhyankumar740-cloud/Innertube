@@ -213,6 +213,18 @@ class JamManager(private val context: Context) {
     var onTypingUsersChanged: ((Set<String>) -> Unit)? = null
     var onLog: ((String) -> Unit)? = null
 
+    /** Fired right after the channel object is created, BEFORE subscribe() is
+     *  called. JamChatManager hooks this to register its "chat"/"reaction"
+     *  broadcastFlow collectors at the correct time - same as our own
+     *  playback/presence listeners below. Registering listeners AFTER
+     *  subscribe() (as this used to do, via a separate attach() call made by
+     *  JamViewModel once createRoom()/joinRoom() had already returned) is why
+     *  chat used to only ever show your own message: your own bubble is
+     *  added locally regardless of the network, but other participants'
+     *  messages depend entirely on this collector actually being registered
+     *  in time to catch what the socket delivers. */
+    var onChannelCreated: ((RealtimeChannel) -> Unit)? = null
+
     private fun ensureSignedIn(): String {
         myUid?.let { return it }
         val uid = DeviceIdentity.getUid(context)
@@ -468,6 +480,10 @@ class JamManager(private val context: Context) {
                 }
             }
         }
+
+        // Let JamChatManager register its "chat"/"reaction" listeners now,
+        // before subscribe() - see onChannelCreated doc comment above.
+        onChannelCreated?.invoke(ch)
 
         ch.subscribe(blockUntilSubscribed = true)
         val presence = ParticipantPresence(uid = uid, name = displayName, avatar = avatar, isHost = isHostFlag)
