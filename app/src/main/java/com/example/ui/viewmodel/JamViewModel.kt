@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class JamUiState(
     val roomCode: String? = null,
@@ -221,10 +222,43 @@ class JamViewModel(
         val uid = myUid ?: return
         val me = _participants.value.find { it.uid == uid }
         val reply = _replyMessage.value
+        val senderName = me?.name ?: "Me"
+        val senderAvatar = me?.avatar ?: "🎧"
+        val messageId = UUID.randomUUID().toString()
+
+        // LOCAL ECHO FIX: sending used to depend entirely on the realtime
+        // channel's "self" broadcast making it back to this same device to
+        // render the sender's own bubble (see JamChatManager.sendMessage's
+        // old comment). In practice that echo isn't reliable enough to hang
+        // the UI on - the first message after joining a room would only
+        // happen to show up because it also landed in the one-time history
+        // load that runs on attach(); every message after that had no such
+        // fallback and just never appeared, even to whoever sent it. Adding
+        // it to our own state immediately removes that dependency entirely.
+        // The id is shared with the broadcast row below, so if the echo (or
+        // a later history refresh) does deliver the same message, the
+        // existing dedup-by-id in onMessageAdded just no-ops instead of
+        // duplicating the bubble.
+        _messages.update { current ->
+            (current + ChatMessage(
+                id = messageId,
+                jamId = jamManager.roomCode.orEmpty(),
+                senderId = uid,
+                senderName = senderName,
+                senderAvatarUrl = senderAvatar,
+                text = text,
+                timestamp = System.currentTimeMillis(),
+                replyToId = reply?.id,
+                replyToText = reply?.text,
+                replyToSenderName = reply?.senderName,
+            )).sortedBy { it.timestamp }
+        }
+
         jamChatManager.sendMessage(
+            id = messageId,
             senderId = uid,
-            senderName = me?.name ?: "Me",
-            senderAvatarUrl = me?.avatar ?: "🎧",
+            senderName = senderName,
+            senderAvatarUrl = senderAvatar,
             text = text,
             replyToId = reply?.id,
             replyToText = reply?.text,
