@@ -131,6 +131,10 @@ class JamChatManager {
                 history.forEach { onMessageAdded?.invoke(it.toChatMessage()) }
             } catch (e: Exception) {
                 // Non-fatal: live messages over broadcast still work even if history load fails.
+                // Logged (rather than silently swallowed) so a broken history load - e.g. schema
+                // not migrated, RLS blocking select, network failure - is actually visible in
+                // Logcat instead of just showing up as "no messages" with no explanation.
+                Timber.tag("JamChatManager").e(e, "Failed to load Jam chat history for room $code")
             }
         }
     }
@@ -175,7 +179,11 @@ class JamChatManager {
                 ch.broadcast(event = "chat", message = row.toJsonObject())
                 SupabaseClient.client.postgrest[MESSAGES_TABLE].insert(row)
             } catch (e: Exception) {
-                // Best-effort: if persistence fails the message still landed live.
+                // Best-effort: if persistence fails the message still landed live via broadcast.
+                // Logged so a failure here - e.g. the anon key lacking insert rights, the
+                // jam_messages table not existing yet - doesn't just look like "chat is broken"
+                // with nothing in the logs to explain why.
+                Timber.tag("JamChatManager").e(e, "Failed to send/persist Jam chat message")
             }
         }
     }
@@ -201,6 +209,7 @@ class JamChatManager {
                 ch.broadcast(event = "reaction", message = current.copy(reactions = updatedReactions).toJsonObject())
             } catch (e: Exception) {
                 // Best-effort - the tap just silently doesn't register if this fails.
+                Timber.tag("JamChatManager").e(e, "Failed to toggle reaction on message $messageId")
             }
         }
     }
