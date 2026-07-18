@@ -72,6 +72,20 @@ class JamViewModel(
         jamManager.onRemoteSeek = { positionMs -> musicPlayer.applyRemoteSeek(positionMs) }
         jamManager.onLog = { msg -> _uiState.value = _uiState.value.copy(errorMessage = msg) }
 
+        // CHAT-LISTENER-TIMING FIX: JamChatManager.attach() must register its
+        // "chat"/"reaction" broadcastFlow collectors BEFORE the channel calls
+        // subscribe() - otherwise this device can miss (or entirely never
+        // receive) broadcasts other participants send, while still seeing
+        // its own messages fine (those are added to local state directly,
+        // not via this listener at all). Previously attach() was called
+        // AFTER jamManager.createRoom()/joinRoom() had already returned -
+        // i.e. after subscribe() had already run - which was exactly that
+        // bug. Hooking onChannelCreated fires this at the right moment,
+        // right after the channel object exists but before it subscribes.
+        jamManager.onChannelCreated = { ch ->
+            jamManager.roomCode?.let { code -> jamChatManager.attach(code, ch) }
+        }
+
         // Whenever THIS device changes song/play-pause/seek locally, broadcast it -
         // but only while we're actually in a room.
         musicPlayer.onLocalSongChange = { track ->
@@ -148,7 +162,6 @@ class JamViewModel(
                     isPlaying = musicPlayer.isPlaying.value,
                     positionMs = musicPlayer.playbackPosition.value
                 )
-                jamChatManager.attach(code, jamManager.realtimeChannel)
                 _uiState.value = JamUiState(roomCode = code, isHost = true, isInRoom = true)
                 startHeartbeat()
             } catch (e: Exception) {
@@ -164,7 +177,6 @@ class JamViewModel(
                 val joined = jamManager.joinRoom(code, displayName, avatar)
                 if (joined) {
                     val roomCode = jamManager.roomCode!!
-                    jamChatManager.attach(roomCode, jamManager.realtimeChannel)
                     _uiState.value = JamUiState(roomCode = roomCode, isHost = false, isInRoom = true)
                     startHeartbeat()
                 } else {
