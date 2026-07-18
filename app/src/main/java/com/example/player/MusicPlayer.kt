@@ -331,7 +331,19 @@ class MusicPlayer(
                 "Nirvana:TrackTransitionWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire(20_000L)
+                // BUG FIX (root cause of "minimize karne par ek song ke baad
+                // band ho jata hai"): this was 20_000L, matching only the
+                // FIRST relay-resolve attempt's own withTimeout(20_000L) in
+                // playYoutubeTrack(). But on a resolve failure, retryRelayResolve()
+                // runs a SECOND withTimeout(20_000L) attempt right after - so the
+                // real worst case (first attempt times out, then a retry) is up
+                // to ~40s of network work, not 20s. With the old 20s wake lock,
+                // the CPU could suspend/Doze mid-retry exactly when the screen
+                // was off, silently stalling that retry forever - which looked
+                // exactly like "played one song, then just stopped" until the
+                // app was reopened. 50s comfortably covers resolve + one retry
+                // + a small margin for actually starting playback afterward.
+                acquire(50_000L)
             }
         } catch (e: Exception) {
             Log.w("MusicPlayer", "Could not acquire transition wake lock", e)
