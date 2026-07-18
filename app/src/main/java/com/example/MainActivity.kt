@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
             appContainer.musicRepository,
             appContainer.musicPlayer,
             appContainer.playlistCloudSync,
-            authViewModel.email
+            authViewModel.isCloudSynced
         )
     }
 
@@ -200,9 +200,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
+                val isInitializing by authViewModel.isInitializing.collectAsState()
                 val isOnboardingComplete by onboardingViewModel.isComplete.collectAsState()
 
                 when {
+                    // Briefly true on cold start while Supabase Auth restores any
+                    // saved session - avoids flashing the sign-in screen for
+                    // already-logged-in users before that restore finishes.
+                    isInitializing -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    )
                     !isLoggedIn -> AuthScreen(authViewModel = authViewModel)
                     // Shown exactly once, right after the very first login on this
                     // device (OnboardingPreferences persists completion locally).
