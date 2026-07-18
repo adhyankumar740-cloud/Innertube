@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class JamUiState(
@@ -107,13 +108,25 @@ class JamViewModel(
         // ABOVE messages that are actually older than it. Sorting by
         // timestamp on every insert keeps the list chronological regardless
         // of which source (history vs. live) delivered a given message first.
+        // ATOMICITY FIX: the history load and the live broadcast collector
+        // run on separate coroutines (JamChatManager's scope is Dispatchers.IO,
+        // which can schedule them on different threads), so a plain
+        // `_messages.value = (_messages.value + msg)...` here was a
+        // read-then-write race - two calls landing close together could both
+        // read the same starting list before either wrote back, and whichever
+        // write won would silently overwrite the other's message. In practice
+        // that could make a message you'd just sent vanish the moment the
+        // history backfill (still running from when you joined/created the
+        // room) wrote after it. MutableStateFlow.update {} makes the
+        // read-modify-write atomic (retries under contention) instead.
         jamChatManager.onMessageAdded = { msg ->
-            if (_messages.value.none { it.id == msg.id }) {
-                _messages.value = (_messages.value + msg).sortedBy { it.timestamp }
+            _messages.update { current ->
+                if (current.any { it.id == msg.id }) current
+                else (current + msg).sortedBy { it.timestamp }
             }
         }
         jamChatManager.onMessageChanged = { msg ->
-            _messages.value = _messages.value.map { if (it.id == msg.id) msg else it }
+            _messages.update { current -> current.map { if (it.id == msg.id) msg else it } }
         }
         // Typing indicator now rides on JamManager's Presence connection (see
         // JamManager.setTyping doc comment) instead of a separate Firebase node.
