@@ -10,15 +10,18 @@ import io.github.jan.supabase.realtime.broadcastFlow
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.presenceDataFlow
 import io.github.jan.supabase.realtime.realtime
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import timber.log.Timber
 
 /**
  * Real cross-device group listening ("Jam"), backed by **Supabase** (Postgrest +
@@ -178,7 +181,10 @@ class JamManager(private val context: Context) {
     private inline fun <reified T> T.toJsonObject(): JsonObject =
         json.encodeToJsonElement(this) as JsonObject
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Timber.tag("JamManager").e(e, "Unhandled error in Jam background task")
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     var roomCode: String? = null
         private set
@@ -443,13 +449,15 @@ class JamManager(private val context: Context) {
         channel = ch
 
         scope.launch {
-            ch.broadcastFlow<PlaybackBroadcast>(event = "playback").collect { payload ->
-                handleIncomingPlayback(payload, uid)
-            }
+            ch.broadcastFlow<PlaybackBroadcast>(event = "playback")
+                .catch { e -> Timber.tag("JamManager").e(e, "Bad playback payload, skipping") }
+                .collect { payload -> handleIncomingPlayback(payload, uid) }
         }
 
         scope.launch {
-            ch.presenceDataFlow<ParticipantPresence>().collect { states ->
+            ch.presenceDataFlow<ParticipantPresence>()
+                .catch { e -> Timber.tag("JamManager").e(e, "Bad presence payload, skipping") }
+                .collect { states ->
                 onParticipantsChanged?.invoke(
                     states.map { JamParticipant(uid = it.uid, name = it.name, avatar = it.avatar, isHost = it.isHost) },
                 )
