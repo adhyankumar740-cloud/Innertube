@@ -9,10 +9,12 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
-// Supabase project credentials for the Jam feature (see SETUP_GUIDE.md section 6).
-// Put SUPABASE_URL / SUPABASE_ANON_KEY in local.properties (gitignored) - falls back
-// to environment variables (useful for CI) and finally to an empty string so the
-// build never fails just because these aren't configured yet.
+// Supabase project credentials, used by Auth (User ID + password accounts,
+// see AuthViewModel.kt), Jam, announcements, and playlist cloud backup (see
+// SETUP_GUIDE.md). Put SUPABASE_URL / SUPABASE_ANON_KEY in local.properties
+// (gitignored) - falls back to environment variables (useful for CI) and
+// finally to an empty string so the build never fails just because these
+// aren't configured yet.
 val localProperties = Properties().apply {
   val localPropertiesFile = rootProject.file("local.properties")
   if (localPropertiesFile.exists()) {
@@ -119,26 +121,22 @@ dependencies {
   implementation(libs.media3.common)
   implementation(libs.media3.database)
   implementation(libs.converter.moshi)
-  // Backend for everything: Jam (group listening + chat), announcements, and
-  // playlist cloud backup - Supabase Postgrest (persistence) + Supabase
-  // Realtime (Broadcast for instant playback/chat sync, Presence for the
-  // live participant list). See SETUP_GUIDE.md section 6.
+  // Backend for everything: the app's own account system (Auth - User ID +
+  // password sign up/login/recovery, see AuthViewModel.kt), Jam (group
+  // listening + chat), announcements, and playlist cloud backup - all via
+  // Supabase Postgrest (persistence) + Supabase Realtime (Broadcast for
+  // instant playback/chat sync, Presence for the live participant list).
+  // See SETUP_GUIDE.md.
   implementation(platform(libs.supabase.bom))
+  implementation(libs.supabase.auth)
   implementation(libs.supabase.postgrest)
   implementation(libs.supabase.realtime)
   implementation(libs.ktor.client.core)
   implementation(libs.ktor.client.okhttp)
   implementation(libs.ktor.client.content.negotiation)
   implementation(libs.ktor.serialization.json)
-  implementation(libs.play.services.auth)
-  // Native "Sign in with Google" via Credential Manager - this is the
-  // user-facing login now (see AuthViewModel.kt). No backend required.
-  implementation(libs.androidx.credentials)
-  implementation(libs.androidx.credentials.play.services.auth)
-  implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.kotlinx.coroutines.play.services)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
