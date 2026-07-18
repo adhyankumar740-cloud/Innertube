@@ -400,7 +400,7 @@ class AuthViewModel(private val context: Context) : ViewModel() {
     private suspend fun resolveLoginEmail(userId: String): String? = try {
         SupabaseClient.client.postgrest
             .rpc("resolve_login_email", buildJsonObject { put("p_user_id", userId) })
-            .decodeAs<String?>()
+            .decodeAsOrNull<String>()
             ?.takeIf { it.isNotBlank() }
     } catch (e: Exception) {
         null
