@@ -13,7 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.retry
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -107,12 +107,21 @@ class JamChatManager {
 
         jobs += scope.launch {
             ch.broadcastFlow<MessageRow>(event = "chat")
-                .catch { e -> Timber.tag("JamChatManager").e(e, "Bad chat payload, skipping") }
+                // FIX: .catch{} logs the error but then lets the flow complete -
+                // i.e. it doesn't "skip" a bad payload the way the old comment
+                // claimed, it kills this collector FOREVER (the coroutine just
+                // finishes normally after catching). One malformed message from
+                // anyone, ever, permanently stopped both sides from receiving
+                // any further live chat - this is the "3-4 messages ke baad
+                // sab band ho jaata hai" bug. .retry{} re-subscribes to the
+                // broadcast instead of giving up, so a single bad payload gets
+                // logged and skipped without taking the whole listener down.
+                .retry { e -> Timber.tag("JamChatManager").e(e, "Bad chat payload, resubscribing"); true }
                 .collect { row -> onMessageAdded?.invoke(row.toChatMessage()) }
         }
         jobs += scope.launch {
             ch.broadcastFlow<MessageRow>(event = "reaction")
-                .catch { e -> Timber.tag("JamChatManager").e(e, "Bad reaction payload, skipping") }
+                .retry { e -> Timber.tag("JamChatManager").e(e, "Bad reaction payload, resubscribing"); true }
                 .collect { row -> onMessageChanged?.invoke(row.toChatMessage()) }
         }
 
