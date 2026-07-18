@@ -71,7 +71,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val username by authViewModel.username.collectAsState()
-    val email by authViewModel.email.collectAsState()
+    val userId by authViewModel.userId.collectAsState()
 
     var latestAnnouncement by remember { mutableStateOf<Announcement?>(null) }
     var loadedAnnouncement by remember { mutableStateOf(false) }
@@ -141,7 +141,11 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(14.dp))
                             Column {
                                 Text(text = username, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Text(text = email, color = Color.Gray, fontSize = 12.sp)
+                                Text(
+                                    text = if (userId.isNotBlank()) "@$userId" else "Guest session",
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                         IconButton(onClick = { authViewModel.logout() }) {
