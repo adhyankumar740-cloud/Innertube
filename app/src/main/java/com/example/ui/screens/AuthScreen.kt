@@ -2,8 +2,12 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -145,7 +149,16 @@ fun AuthScreen(
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                AnimatedContent(targetState = mode, label = "auth_mode") { current ->
+                AnimatedContent(
+                    targetState = mode,
+                    label = "auth_mode",
+                    contentAlignment = Alignment.TopCenter,
+                    transitionSpec = {
+                        (fadeIn(animationSpec = tween(220, delayMillis = 90)) togetherWith
+                            fadeOut(animationSpec = tween(90)))
+                            .using(SizeTransform(clip = true))
+                    }
+                ) { current ->
                     when (current) {
                         AuthMode.SIGN_IN -> SignInContent(
                             authViewModel = authViewModel,
