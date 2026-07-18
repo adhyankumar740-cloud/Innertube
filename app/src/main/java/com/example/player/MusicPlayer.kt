@@ -472,6 +472,15 @@ class MusicPlayer(
                     // one device randomly stop dead while the other kept going,
                     // looking exactly like "song sirf ek device pe chalta hai".
                     hasReachedPlayingState = true
+                    // WAKE-LOCK FIX: the track has now actually started playing,
+                    // so whatever wake lock was covering its startup (see
+                    // acquireTransitionWakeLock() calls in playYoutubeTrack/
+                    // playItunesTrack/handleTrackEnded) is no longer needed -
+                    // release it here so it's tied to "did playback actually
+                    // begin", the same real success signal for every path that
+                    // can start a track (search/tap, skip, autoplay, transition),
+                    // instead of relying only on its own 50s safety-timeout.
+                    releaseTransitionWakeLock()
                 }
                 Player.STATE_ENDED -> handleTrackEnded()
                 else -> {}
@@ -555,6 +564,20 @@ class MusicPlayer(
             .setArtist(track.artist ?: "Unknown Artist")
         if (!track.artworkUrl.isNullOrBlank()) {
             builder.setArtworkUri(Uri.parse(track.artworkUrl))
+        }
+        // SEEK-BAR FIX ("seek bar in the control panel disappears"): this
+        // never told the session a duration, so the system media
+        // notification/lock-screen/quick-settings seek bar depended entirely
+        // on ExoPlayer figuring the duration out for itself from the stream -
+        // which, for a network-fetched/cache-through source, isn't always
+        // known immediately and can be briefly unknown again across a track
+        // change or a rebuffer, making the seek bar blink out exactly at
+        // those moments. Track duration is already known upfront (it's in
+        // our own data), so setting it directly here gives the system UI a
+        // duration to show right away and keeps it stable regardless of what
+        // ExoPlayer itself currently reports.
+        if (track.durationMs > 0) {
+            builder.setDurationMs(track.durationMs)
         }
         return builder.build()
     }
@@ -1031,6 +1054,18 @@ class MusicPlayer(
 
     private fun playItunesTrack(track: Track, autoPlay: Boolean = true) {
         cancelBufferingWatchdog()
+        // WAKE-LOCK FIX (root cause of "search a song, minimize right away,
+        // it never starts"): acquireTransitionWakeLock() used to only be
+        // called from handleTrackEnded() - i.e. only for AUTOMATIC track-to-
+        // track transitions. Any track started directly (tap a search
+        // result, tap a queue item, skip) got NO wake lock at all for its
+        // startup network fetch. If the screen turned off right after that
+        // tap, the CPU had nothing keeping it awake and could suspend mid-
+        // fetch - the track then just never starts, with no error, until the
+        // phone happens to wake up for some other reason. Covering every
+        // track start here (released the moment STATE_READY actually fires,
+        // see onPlaybackStateChanged) closes that gap for good.
+        acquireTransitionWakeLock()
         _currentTrack.value = track
         if (!isApplyingRemote) onLocalSongChange?.invoke(track)
         _isBuffering.value = true
@@ -1064,6 +1099,11 @@ class MusicPlayer(
         relayRetriedForVideoId = null
         watchdogRetriedForVideoId = null
         cancelBufferingWatchdog()
+        // WAKE-LOCK FIX: see the matching comment in playItunesTrack() above -
+        // this covers the exact same gap for YouTube/relay tracks, which is
+        // the more common case and does more network work (relay resolve)
+        // during startup, making it even more exposed to this bug.
+        acquireTransitionWakeLock()
         _currentTrack.value = track
         if (!isApplyingRemote) onLocalSongChange?.invoke(track)
 
