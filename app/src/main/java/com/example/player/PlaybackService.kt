@@ -260,6 +260,27 @@ class PlaybackService : MediaSessionService() {
     // foreground state, richer notification with art/controls) - this
     // placeholder is only ever visible for that brief loading window.
     private fun showLoadingNotification() {
+        // SEEK-BAR FIX (root cause of "seek bar control centre se gayab ho
+        // jaata hai"): this plain NotificationCompat notification has no
+        // MediaStyle/session attached - it's just a generic "Loading..."
+        // notification. Calling startForeground() with it used to happen on
+        // EVERY track load (first-ever play AND every automatic skip/
+        // transition alike, via PlaybackBridge.onPlaybackStarting), which
+        // forcibly replaced whatever notification the service was showing.
+        // The very first time that's fine (there's nothing else yet), but on
+        // every later transition the service was already showing Media3's
+        // own real MediaStyle notification for the PREVIOUS track (art, seek
+        // bar, transport controls) - swapping it out for this bare
+        // placeholder for the whole resolve window meant the system's media
+        // widget (notification shade / lock screen / quick-settings "control
+        // centre") lost its seek bar and controls on every single song
+        // change, only to reappear once Media3 re-posted its own notification
+        // a few seconds later. This placeholder is only actually needed to
+        // protect the process during the very first, cold load - once the
+        // player already has a media item, Media3's real notification is
+        // already up and already keeps the service in foreground, so there's
+        // nothing to protect and no need to ever touch the notification here.
+        if (::player.isInitialized && player.mediaItemCount > 0) return
         ensureLoadingChannel()
         val notification = NotificationCompat.Builder(this, LOADING_CHANNEL_ID)
             .setContentTitle("Loading...")
