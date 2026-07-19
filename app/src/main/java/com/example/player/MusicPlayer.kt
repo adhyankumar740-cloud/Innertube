@@ -23,6 +23,7 @@ import com.example.data.model.TrackSongBridge
 import com.example.data.model.TrackSource
 import com.example.data.network.InnerTubeStreamResolver
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -264,6 +265,51 @@ class MusicPlayer(
     // immediately instead of waiting on a fresh network round trip.
     private val preloadedStreamUrls = object : LinkedHashMap<String, String>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 5
+    }
+
+    // GAP-DEDUP FIX (root cause of the ~20-25s wait between songs even though
+    // preloadNextTrack()/preloadAutoplayCandidate() were already resolving the
+    // next track in the background): if that background resolve for a videoId
+    // hadn't *finished* yet by the moment the track actually needed to play
+    // (a very normal race - resolves can legitimately take a while, and the
+    // track can end at any point), playYoutubeTrack() had no way to know a
+    // resolve for that exact same videoId was already in flight - it just
+    // started a brand-new, completely independent resolveStreamUrl() call.
+    // Both calls then had to queue up one after another behind
+    // CipherDeobfuscator's single shared WebView mutex (only one resolve can
+    // actually run at a time), so the real wait became roughly the already
+    // in-flight resolve's remaining time PLUS a full second resolve from
+    // scratch - close to double what it should be. inFlightResolves lets any
+    // caller for the same videoId just await the one resolve already running
+    // instead of ever starting a competing second one.
+    private val inFlightResolves = mutableMapOf<String, CompletableDeferred<String>>()
+
+    private suspend fun resolveStreamUrlShared(videoId: String): String {
+        preloadedStreamUrls[videoId]?.let { return it }
+
+        val deferred = CompletableDeferred<String>()
+        val existing = synchronized(inFlightResolves) {
+            val current = inFlightResolves[videoId]
+            if (current == null) inFlightResolves[videoId] = deferred
+            current
+        }
+        if (existing != null) return existing.await()
+
+        return try {
+            val url = withContext(Dispatchers.IO) {
+                InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
+            }
+            preloadedStreamUrls[videoId] = url
+            deferred.complete(url)
+            url
+        } catch (e: Exception) {
+            deferred.completeExceptionally(e)
+            throw e
+        } finally {
+            synchronized(inFlightResolves) {
+                if (inFlightResolves[videoId] === deferred) inFlightResolves.remove(videoId)
+            }
+        }
     }
 
     // BANDWIDTH-CONTENTION FIX (part of "buffers right after a song ends"):
@@ -1016,13 +1062,7 @@ class MusicPlayer(
 
         preloadJob = scope.launch {
             try {
-                val streamUrl = preloadedStreamUrls[videoId] ?: run {
-                    val resolved = withContext(Dispatchers.IO) {
-                        InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
-                    }
-                    preloadedStreamUrls[videoId] = resolved
-                    resolved
-                }
+                val streamUrl = resolveStreamUrlShared(videoId)
 
                 withContext(Dispatchers.IO) {
                     val dataSource =
@@ -1085,13 +1125,7 @@ class MusicPlayer(
 
                 if (next.source != TrackSource.YOUTUBE) return@launch
                 val videoId = next.youtubeVideoId ?: return@launch
-                val streamUrl = preloadedStreamUrls[videoId] ?: run {
-                    val resolved = withContext(Dispatchers.IO) {
-                        InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
-                    }
-                    preloadedStreamUrls[videoId] = resolved
-                    resolved
-                }
+                val streamUrl = resolveStreamUrlShared(videoId)
 
                 withContext(Dispatchers.IO) {
                     val dataSource =
@@ -1207,11 +1241,14 @@ class MusicPlayer(
         // karke seedha ExoPlayer se bajao. Fail hone par (relay down, timeout,
         // 401/502 etc.) playerListener.onPlayerError ek baar retry karta hai,
         // uske baad bhi fail ho to track skip/error ho jata hai.
-        // FIX: if preloadNextTrack() already resolved this videoId while the
-        // previous track was playing, use that cached URL immediately instead
-        // of making the caller wait on a fresh (potentially slow) relay call -
-        // this is what actually removes the buffering gap between tracks.
-        val preloadedUrl = preloadedStreamUrls.remove(videoId)
+        // FIX: if preloadNextTrack()/preloadAutoplayCandidate() already resolved
+        // (or is still in the middle of resolving) this videoId while the
+        // previous track was playing, reuse that instead of making the caller
+        // wait on a completely fresh (potentially slow, and redundantly
+        // mutex-queued behind the one already running) relay call - this is
+        // what actually removes the buffering gap between tracks. See
+        // resolveStreamUrlShared()'s doc comment for the "double wait" bug
+        // this replaced.
         scope.launch {
             try {
                 // TIMEOUT FIX: resolveStreamUrl() (cipher deobfuscation + PoToken + multi-client
@@ -1220,10 +1257,8 @@ class MusicPlayer(
                 // error, because startBufferingWatchdog() only guards AFTER a URL is obtained.
                 // withTimeout guarantees this always either succeeds or throws within 20s, so the
                 // existing catch block below (retry-once, then show _playbackError) always runs.
-                val streamUrl = preloadedUrl ?: withTimeout(20_000L) {
-                    withContext(Dispatchers.IO) {
-                        InnerTubeStreamResolver.resolveStreamUrl(context, videoId)
-                    }
+                val streamUrl = withTimeout(20_000L) {
+                    resolveStreamUrlShared(videoId)
                 }
                 if (loadedYoutubeVideoId != videoId) return@launch // stale, user ne dusra gaana chala diya
                 runOnController { controller ->
