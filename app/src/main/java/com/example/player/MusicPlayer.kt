@@ -847,6 +847,30 @@ class MusicPlayer(
         reconnectCallback = callback
         try {
             cm.registerNetworkCallback(request, callback)
+            // SAFETY-TIMEOUT FIX (root cause of "song ends, nothing happens,
+            // no error, ever - only reopening/force-restarting the app
+            // recovers"): onAvailable() below only fires on a genuine
+            // transition to available. If isOnline() false-negatived even
+            // once (a real ConnectivityManager quirk - it can briefly report
+            // no active/validated network right as a track ends, even though
+            // the connection never actually dropped), there is no transition
+            // left to wait for, so onAvailable() never fires - this callback
+            // then sits registered forever, completely silently: no
+            // snackbar (that only comes from paths that reach
+            // _playbackError), no log, no retry, no eventual give-up. This
+            // bounds that wait: after 15s with no transition, stop waiting
+            // and just retry anyway via the normal advance(1) path, which
+            // still has its own error handling/give-up logic if the retry
+            // itself fails for a real reason.
+            scope.launch {
+                delay(15_000L)
+                if (reconnectCallback === callback) {
+                    try { cm.unregisterNetworkCallback(callback) } catch (e: Exception) { /* already gone */ }
+                    reconnectCallback = null
+                    Log.w("MusicPlayer", "waitForNetworkThenRetry: timed out waiting for network callback, retrying anyway")
+                    advance(1)
+                }
+            }
         } catch (e: Exception) {
             reconnectCallback = null
             releaseTransitionWakeLock()
