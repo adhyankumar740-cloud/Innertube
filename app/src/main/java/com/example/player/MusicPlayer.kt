@@ -528,6 +528,17 @@ class MusicPlayer(
                     // one device randomly stop dead while the other kept going,
                     // looking exactly like "song sirf ek device pe chalta hai".
                     hasReachedPlayingState = true
+                    // FAILURE-COUNTER RESET FIX (part of "2nd song stopped in
+                    // between, no seek bar"): consecutivePlaybackFailures was
+                    // never reset anywhere on a genuine success - only in
+                    // setQueue()/playQueueItem(). That let failures from
+                    // earlier in a long session stay "banked" against the
+                    // 3-strikes give-up limit forever, so a totally unrelated
+                    // later hiccup could trip a full stop after just 1-2 more
+                    // failures instead of 3 genuinely consecutive ones.
+                    // STATE_READY is the real "this track is actually playing"
+                    // signal, so it's the correct place to clear the streak.
+                    consecutivePlaybackFailures = 0
                     // WAKE-LOCK FIX: the track has now actually started playing,
                     // so whatever wake lock was covering its startup (see
                     // acquireTransitionWakeLock() calls in playYoutubeTrack/
@@ -964,21 +975,35 @@ class MusicPlayer(
         if (!isOnline()) {
             _isBuffering.value = false
             _isPlaying.value = false
+            // SILENT-STALL VISIBILITY FIX (root cause of "song just stops for
+            // a while, no error, seek bar gone"): this branch used to do
+            // nothing user-facing at all. waitForNetworkThenRetry() can
+            // legitimately take up to ~15s before it gives up waiting on a
+            // connectivity callback and retries anyway (see its own doc
+            // comment on ConnectivityManager's false-negative quirk) - from
+            // the user's side that dead-air window looked exactly like the
+            // song randomly cutting off with zero explanation, seek bar and
+            // all. Reusing the existing playbackError/Snackbar pipeline here
+            // surfaces that gap instead of hiding it - playback still
+            // recovers automatically once the network's actually back (or
+            // the safety timeout fires), this just stops it from looking
+            // broken/stuck in the meantime.
+            _playbackError.value = "Network thoda ruk gaya, phir se try kar rahe hain..."
             waitForNetworkThenRetry()
             return
         }
         consecutivePlaybackFailures++
+        // DEBUG-VISIBILITY FIX: the generic Hindi message alone gave no way
+        // to tell WHY it actually failed (expired stream URL, 403, timeout,
+        // DNS, etc.) without adb/Logcat. Surfacing _lastStreamErrorDebug
+        // (already being captured, just never shown) puts the real
+        // exception straight into the Snackbar so the actual cause is
+        // visible on-screen, not just "it stopped."
+        val debugDetail = _lastStreamErrorDebug.value
         if (consecutivePlaybackFailures >= maxConsecutivePlaybackFailures) {
             consecutivePlaybackFailures = 0
             _isBuffering.value = false
             _isPlaying.value = false
-            // DEBUG-VISIBILITY FIX: the generic Hindi message alone gave no way
-            // to tell WHY it actually failed (expired stream URL, 403, timeout,
-            // DNS, etc.) without adb/Logcat. Appending _lastStreamErrorDebug
-            // (already being captured, just never shown) puts the real
-            // exception straight into the same Snackbar so the actual cause is
-            // visible on-screen after the fact, not just "it stopped."
-            val debugDetail = _lastStreamErrorDebug.value
             _playbackError.value = if (debugDetail != null) {
                 "Kai gaane play nahi ho paaye, ruk gaya - kuch aur try karein.\n$debugDetail"
             } else {
@@ -988,6 +1013,20 @@ class MusicPlayer(
             // Giving up entirely - nothing more will start playing, so hold no wake lock.
             releaseTransitionWakeLock()
             return
+        }
+        // SILENT-SKIP VISIBILITY FIX: previously only the FINAL give-up (3rd
+        // consecutive failure) ever showed anything - the 1st and 2nd
+        // failures silently called advance(1) with zero feedback, so a
+        // single broken track (quietly replaced by whatever played next, or
+        // by nothing at all if the next attempt also stalled) also looked
+        // exactly like "the song just stopped" even though the app was
+        // actually already recovering in the background. Showing the same
+        // already-captured debug detail here means the real cause is visible
+        // the moment it happens, not just after giving up entirely.
+        _playbackError.value = if (debugDetail != null) {
+            "Yeh gaana atak gaya, agle pe ja rahe hain...\n$debugDetail"
+        } else {
+            "Yeh gaana atak gaya, agle pe ja rahe hain..."
         }
         advance(1)
     }
