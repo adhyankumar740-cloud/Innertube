@@ -926,7 +926,18 @@ class MusicPlayer(
             consecutivePlaybackFailures = 0
             _isBuffering.value = false
             _isPlaying.value = false
-            _playbackError.value = "Kai gaane play nahi ho paaye, ruk gaya - kuch aur try karein."
+            // DEBUG-VISIBILITY FIX: the generic Hindi message alone gave no way
+            // to tell WHY it actually failed (expired stream URL, 403, timeout,
+            // DNS, etc.) without adb/Logcat. Appending _lastStreamErrorDebug
+            // (already being captured, just never shown) puts the real
+            // exception straight into the same Snackbar so the actual cause is
+            // visible on-screen after the fact, not just "it stopped."
+            val debugDetail = _lastStreamErrorDebug.value
+            _playbackError.value = if (debugDetail != null) {
+                "Kai gaane play nahi ho paaye, ruk gaya - kuch aur try karein.\n$debugDetail"
+            } else {
+                "Kai gaane play nahi ho paaye, ruk gaya - kuch aur try karein."
+            }
             Log.e("MusicPlayer", "Stopping auto-skip after $maxConsecutivePlaybackFailures playback failures in a row")
             // Giving up entirely - nothing more will start playing, so hold no wake lock.
             releaseTransitionWakeLock()
