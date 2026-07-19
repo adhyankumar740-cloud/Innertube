@@ -736,6 +736,14 @@ class MusicPlayer(
     private fun triggerAutoplay() {
         val current = _currentTrack.value ?: return
         val provider = autoplayProvider ?: return
+        // Belt-and-suspenders for the same foreground-gap fix as
+        // handleTrackEnded(): skipNext() reaches this function via advance()
+        // directly, without ever going through handleTrackEnded(), so it
+        // wouldn't otherwise get the wake lock or foreground promotion
+        // either. Both calls are safe to repeat (acquireTransitionWakeLock()
+        // no-ops if already held; startForeground() is idempotent).
+        acquireTransitionWakeLock()
+        PlaybackBridge.onPlaybackStarting?.invoke()
         // AUTOPLAY-GAP FIX: if preloadAutoplayCandidate() already resolved
         // (and pre-cached) a recommendation for THIS track while it was still
         // playing, use it directly - this is what actually removes the
@@ -881,6 +889,20 @@ class MusicPlayer(
         // Cover the network gap between "this track just ended" and "the next
         // one is actually playing" - see acquireTransitionWakeLock() for why.
         acquireTransitionWakeLock()
+        // FOREGROUND-GAP FIX: PlaybackBridge.onPlaybackStarting (which calls
+        // startForeground() in PlaybackService) previously only fired once
+        // playYoutubeTrack/playItunesTrack actually began loading a specific
+        // track - i.e. AFTER triggerAutoplay()'s own recommendation search
+        // (up to 20s) already succeeded. The wake lock above keeps the CPU
+        // awake during that search, but does NOT stop Android/OEM battery
+        // managers from killing a non-foreground service outright while the
+        // app is backgrounded - which is exactly what happens if the screen
+        // is locked right as a track ends: the search never gets a chance to
+        // finish, so nothing ever plays next, with no error at all. Firing
+        // this here, the instant a track ends, promotes the service to
+        // foreground for the *entire* search-plus-load window, not just the
+        // load part.
+        PlaybackBridge.onPlaybackStarting?.invoke()
         if (!hasReachedPlayingState) {
             registerPlaybackFailureAndMaybeStop()
             return
