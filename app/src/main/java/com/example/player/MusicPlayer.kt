@@ -387,6 +387,16 @@ class MusicPlayer(
             // already released (e.g. by its own timeout) - safe to ignore
         }
         transitionWakeLock = null
+        // SAFETY NET: this is already the shared "a track-transition attempt is
+        // over now, one way or another" signal (called on real success in
+        // onPlaybackStateChanged/onIsPlayingChanged, AND on giving up entirely in
+        // registerPlaybackFailureAndMaybeStop/triggerAutoplay's "nothing found"
+        // branch) - piggyback the same clear here so the placeholder "Loading..."
+        // notification from showLoadingNotification() can never get stuck showing
+        // forever after a failure path that never reaches a real setMediaItem()
+        // call (the 3 success-path call sites already clear it too; calling this
+        // an extra time when it's already been cleared is a harmless no-op).
+        PlaybackBridge.onMediaItemReady?.invoke()
     }
 
     init {
@@ -604,6 +614,7 @@ class MusicPlayer(
                     controller.setMediaItem(mediaItem)
                     controller.prepare()
                     if (autoPlay) controller.play() else controller.pause()
+                    PlaybackBridge.onMediaItemReady?.invoke()
                 }
                 resolveAndApplyCatchUp(catchUp, track.durationMs)
                 startProgressTracker()
@@ -1053,6 +1064,11 @@ class MusicPlayer(
     }
 
     private fun playItunesTrack(track: Track, autoPlay: Boolean = true) {
+        // FOREGROUND-STARTUP FIX: must run synchronously, before anything
+        // async below, so the service is already a protected foreground
+        // service for the whole rest of this function. See the full
+        // reasoning on PlaybackService.showLoadingNotification().
+        PlaybackBridge.onPlaybackStarting?.invoke()
         cancelBufferingWatchdog()
         // WAKE-LOCK FIX (root cause of "search a song, minimize right away,
         // it never starts"): acquireTransitionWakeLock() used to only be
@@ -1090,12 +1106,17 @@ class MusicPlayer(
             // ROOM-STATE FIX: honour the caller's intended play state instead of
             // always forcing play() - see playYoutubeTrack for the full reasoning.
             if (autoPlay) controller.play() else controller.pause()
+            PlaybackBridge.onMediaItemReady?.invoke()
         }
         resolveAndApplyCatchUp(catchUp, track.durationMs)
         startProgressTracker()
     }
 
     private fun playYoutubeTrack(track: Track, autoPlay: Boolean = true) {
+        // FOREGROUND-STARTUP FIX: same as playItunesTrack above - must be the
+        // very first thing that happens, synchronously, before the relay/
+        // InnerTube resolve (the slow, network-bound part) starts below.
+        PlaybackBridge.onPlaybackStarting?.invoke()
         relayRetriedForVideoId = null
         watchdogRetriedForVideoId = null
         cancelBufferingWatchdog()
@@ -1165,6 +1186,7 @@ class MusicPlayer(
                     // queued a track but nobody hit play) must stay paused here too,
                     // instead of unconditionally starting audio on this device.
                     if (autoPlay) controller.play() else controller.pause()
+                    PlaybackBridge.onMediaItemReady?.invoke()
                 }
                 // SYNC-DRIFT FIX: only now (once THIS device's resolve has actually
                 // finished) do we know how long it took - so only now can we correctly
