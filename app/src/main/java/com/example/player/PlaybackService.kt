@@ -1,8 +1,14 @@
 package com.example.player
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationCompat
 import com.example.MainActivity
+import com.example.R
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -82,6 +88,13 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // FOREGROUND-STARTUP FIX: see showLoadingNotification() below for the
+        // full reasoning. Wired here (as early in the service's life as
+        // possible) so it's ready before any real play() call can happen.
+        PlaybackBridge.onPlaybackStarting = { showLoadingNotification() }
+        PlaybackBridge.onMediaItemReady = { clearLoadingNotification() }
+
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -210,6 +223,90 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // FOREGROUND-STARTUP FIX (root cause of "minimize the app right after
+    // tapping play, before the song has loaded - it never starts, infinite
+    // buffer, until the app is reopened and play is tapped again"):
+    //
+    // Per Media3's own docs (Background playback with a MediaSessionService),
+    // "the notification is created as soon as the Player has MediaItem
+    // instances in its playlist" - i.e. Media3 only auto-promotes this
+    // service to a real (OS-protected) foreground service once ExoPlayer
+    // actually has a MediaItem. But MusicPlayer.playYoutubeTrack/
+    // playItunesTrack don't call controller.setMediaItem() until AFTER the
+    // stream URL has been resolved - a network + on-device WebView/cipher
+    // operation that can legitimately take several seconds, especially cold.
+    // During that whole window `player` is empty/idle, so this service is
+    // just an ordinary background/bound service, not foreground - the
+    // process is fully exposed to being frozen or killed the instant the
+    // app is minimized. The transition wake lock MusicPlayer already holds
+    // during this window keeps the CPU from sleeping, but that's a
+    // different mechanism to process-level foreground protection - it does
+    // NOT stop Android's cached-app freezer or an aggressive OEM battery
+    // manager from suspending a non-foreground process outright, which is
+    // why the resolve (and its own internal safety timeouts) never got a
+    // chance to actually run until the app was reopened.
+    //
+    // Fix: post our own minimal, temporary notification and call
+    // startForeground() ourselves, synchronously, the moment MusicPlayer's
+    // play() is invoked - see PlaybackBridge.onPlaybackStarting, wired in
+    // onCreate() above. Because play() runs directly on the tap that
+    // requested it, this always happens while the app is still genuinely in
+    // the foreground, which is exactly when Android allows a service to
+    // promote itself - so the process is already a protected foreground
+    // service for the *entire* resolve window, for every track load
+    // (first-ever play, manual skip, and automatic advance/autoplay alike).
+    // A moment later, once the real MediaItem is actually set, Media3's own
+    // MediaNotification takes over automatically (same underlying
+    // foreground state, richer notification with art/controls) - this
+    // placeholder is only ever visible for that brief loading window.
+    private fun showLoadingNotification() {
+        ensureLoadingChannel()
+        val notification = NotificationCompat.Builder(this, LOADING_CHANNEL_ID)
+            .setContentTitle("Loading...")
+            .setContentText("Getting your music ready")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        try {
+            startForeground(LOADING_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            // Best-effort only. If this ever throws (e.g. a genuinely
+            // background-started first play, which Android can legitimately
+            // refuse), we fall back to today's existing behaviour - Media3's
+            // own automatic promotion once the MediaItem is set - so this
+            // can't make things worse than they already were.
+            Log.w("PlaybackService", "Could not start foreground for loading notification", e)
+        }
+    }
+
+    // Dismisses the placeholder posted by showLoadingNotification() once the
+    // real MediaItem is set - see onMediaItemReady's doc comment. Only
+    // cancels our own placeholder id; never touches whatever notification
+    // Media3 itself is now managing, so this can't interfere with it.
+    private fun clearLoadingNotification() {
+        try {
+            val manager = getSystemService(NotificationManager::class.java) ?: return
+            manager.cancel(LOADING_NOTIFICATION_ID)
+        } catch (e: Exception) {
+            // Not worth failing playback over a stale placeholder notification.
+        }
+    }
+
+    private fun ensureLoadingChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(LOADING_CHANNEL_ID) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                LOADING_CHANNEL_ID,
+                "Loading music",
+                NotificationManager.IMPORTANCE_LOW
+            )
+        )
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -221,11 +318,18 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        if (PlaybackBridge.onPlaybackStarting != null) PlaybackBridge.onPlaybackStarting = null
+        if (PlaybackBridge.onMediaItemReady != null) PlaybackBridge.onMediaItemReady = null
         mediaSession?.run {
             player.release()
             release()
             mediaSession = null
         }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val LOADING_NOTIFICATION_ID = 9001
+        private const val LOADING_CHANNEL_ID = "playback_loading"
     }
 }
