@@ -21,5 +21,24 @@ object PlaybackBridge {
     // Control-center/lock-screen se seek bar drag hone par yeh asli
     // MusicPlayer.seekTo() ko call karta hai.
     var onSeek: ((Long) -> Unit)? = null
+
+    // FOREGROUND-STARTUP FIX: opposite direction from the three callbacks
+    // above - this one is SET by PlaybackService (only the Service can call
+    // startForeground()) and INVOKED by MusicPlayer, synchronously, the
+    // instant a track starts loading (see playYoutubeTrack/playItunesTrack).
+    // See the long comment on PlaybackService.showLoadingNotification() for
+    // why this exists: it's what protects the app process from being frozen/
+    // killed if the user minimizes during the network resolve, before
+    // ExoPlayer has a real MediaItem of its own to trigger Media3's usual
+    // automatic foreground promotion.
+    var onPlaybackStarting: (() -> Unit)? = null
+
+    // Companion to onPlaybackStarting above: invoked once controller.setMediaItem()
+    // has actually been called for a real (resolved) track, so PlaybackService can
+    // dismiss its temporary "Loading..." placeholder notification - Media3's own
+    // MediaNotification takes over from this point on (same foreground state,
+    // just a richer notification with art/controls). Without this, the placeholder
+    // would never get cleared and could linger alongside Media3's real notification.
+    var onMediaItemReady: (() -> Unit)? = null
 }
 
