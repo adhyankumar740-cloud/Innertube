@@ -1,240 +1,511 @@
 package com.example.player
 
-import android.app.PendingIntent
-import android.content.Intent
-import android.net.Uri
+import android.content.ComponentName
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
-import androidx.media3.common.AudioAttributes
+import androidx.core.content.ContextCompat
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.ResolvingDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.session.DefaultMediaNotificationProvider
-import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
-import com.example.MainActivity
-import com.example.R
-import com.example.data.network.InnerTubeStreamResolver
-import kotlinx.coroutines.runBlocking
+import androidx.media3.common.Timeline
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.example.data.model.Song
+import com.example.data.model.Track
+import com.example.data.model.TrackSongBridge
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
- * MetroList-style playback engine for this app.
+ * App-level playback facade used by every ViewModel (MusicViewModel, PlaylistViewModel,
+ * JamViewModel, SamplesViewModel) and by MainActivity's mini player / Now Playing sheet.
  *
- * The previous PlaybackService kept ExoPlayer permanently down to a single MediaItem and
- * app-level code (MusicPlayer) manually swapped that item on every skip - Media3's own
- * Next/Previous availability, auto-advance and system media notification are all driven off
- * the *player's own timeline*, so a single-item player structurally could never expose a real
- * "next" item, which is exactly what forced the old ForwardingPlayer/MediaSession.Callback hack
- * in the previous version of this file (see PlaybackBridge's old doc comment for the full
- * history) and what still made system UI (notification / lock screen / Bluetooth / Android
- * Auto) unreliable.
+ * This does NOT hold an ExoPlayer itself. It connects a Media3 [MediaController] to the real
+ * player living in [MusicService] (a MediaSessionService), and mirrors that controller's state
+ * into StateFlows the UI can collect. Going through the session/controller (instead of a plain
+ * local ExoPlayer) is what makes background playback + the system notification/lock-screen
+ * controls work - see MusicService's doc comment for the full architecture rationale.
  *
- * This version, like MetroList's MusicService, gives ExoPlayer a REAL multi-item playlist
- * (MusicPlayer.setQueue()/addToQueue()/etc. now call MediaController.setMediaItems()/
- * addMediaItem() with one MediaItem per track - see TrackMediaItem.kt) and resolves each
- * item's actual audio URL lazily, only once ExoPlayer is actually about to read its bytes, via
- * a [ResolvingDataSource] wrapped around the existing on-disk [PlaybackCache]. That is the same
- * mechanism MetroList's MusicService.createDataSourceFactory() uses for YouTube streams. With a
- * real timeline in place:
- *  - Next/Previous/seek/queue-reordering are all native MediaSession/Player behaviour - no
- *    custom ForwardingPlayer or onPlayerCommandRequest() override needed any more.
- *  - Auto Next between playlist items is native ExoPlayer playlist advance; auto-advancing into
- *    a fresh autoplay recommendation once the playlist runs out is still driven by MusicPlayer
- *    (it owns the autoplayProvider callback, which needs MusicRepository), which appends the
- *    next MediaItem to this same real timeline just before the last item ends - see
- *    MusicPlayer's onMediaItemTransition handling.
- *  - Background playback + the system media notification come from Media3's own foreground
- *    promotion (as soon as the session player has media items) and [DefaultMediaNotificationProvider],
- *    same as MetroList - no manual startForeground()/placeholder-notification workaround needed.
+ * Responsibilities beyond simple transport control:
+ *  - Converts between the app's [Track] model and Media3 [MediaItem]s (see TrackMediaItem.kt),
+ *    so `queue`/`currentTrack` can always be rebuilt straight from the controller's own timeline.
+ *  - Autoplay: once the queue is down to its last item, asks [autoplayProvider] (wired up by
+ *    MusicViewModel to MusicRepository.getAutoplayRecommendation) for a follow-up track and
+ *    appends it to the same real timeline, so playback advances into it seamlessly instead of
+ *    just stopping.
+ *  - Error handling: a resolve/network failure surfaces as a Player error on the controller;
+ *    this retries transient failures a couple of times, waits out real connectivity loss instead
+ *    of burning through the queue, and otherwise skips the bad track and surfaces [playbackError].
+ *  - Jam hooks: `onLocal*` callbacks fire for locally-initiated song/play-pause/seek/stop events
+ *    (JamViewModel wires these to broadcast them), and `applyRemote*` applies an incoming Jam
+ *    update without re-firing those same local callbacks (which would otherwise echo it right
+ *    back out to the room).
  */
-class MusicService : MediaSessionService() {
+class MusicPlayer(private val context: Context) {
 
-    private var mediaSession: MediaSession? = null
-    lateinit var player: ExoPlayer
-        private set
-
-    // Short-lived resolved-URL cache so replaying/seeking back into a track that was already
-    // resolved this session doesn't need a fresh network round trip every time ExoPlayer reopens
-    // its data source (e.g. after a seek outside the cached range). Mirrors MetroList's own
-    // songUrlCache TTL pattern in MusicService.createDataSourceFactory().
-    private data class ResolvedUrl(val url: String, val expiresAtMs: Long)
-    private val resolvedUrlCache = object : LinkedHashMap<String, ResolvedUrl>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ResolvedUrl>?) = size > 30
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Unhandled error", throwable)
+        _playbackError.value = throwable.message ?: "Playback error"
     }
-    private val resolvedUrlTtlMs = 4 * 60 * 1000L // YouTube-resolved URLs are short-lived signed links
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
-    override fun onCreate() {
-        super.onCreate()
+    private var controller: MediaController? = null
+    private val controllerReady = CompletableDeferred<MediaController>()
 
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
+    // ---------------------------------------------------------------------
+    // Public state
+    // ---------------------------------------------------------------------
 
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
-                DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
-                1000,
-                1500
-            )
-            .build()
+    private val _currentTrack = MutableStateFlow<Track?>(null)
+    val currentTrack: StateFlow<Track?> = _currentTrack.asStateFlow()
 
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(createDataSourceFactory()))
-            .setLoadControl(loadControl)
-            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_NETWORK)
-            .build()
-        player.addListener(playerListener)
+    private val _isPlaying = MutableStateFlow(false)
+    val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
-        val contentIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private val _isBuffering = MutableStateFlow(false)
+    val isBuffering: StateFlow<Boolean> = _isBuffering.asStateFlow()
 
-        mediaSession = MediaSession.Builder(this, player)
-            .setSessionActivity(contentIntent)
-            .build()
+    private val _playbackPosition = MutableStateFlow(0L)
+    val playbackPosition: StateFlow<Long> = _playbackPosition.asStateFlow()
 
-        // Real Media3 media notification (art, title/artist, transport controls including
-        // Next/Previous which now work natively because the player has a real timeline) - the
-        // exact same provider class + constructor shape MetroList's MusicService uses, instead
-        // of the old hand-rolled placeholder NotificationCompat builder this service used to
-        // post itself.
-        setMediaNotificationProvider(
-            DefaultMediaNotificationProvider(
-                this,
-                { NOTIFICATION_ID },
-                CHANNEL_ID,
-                R.string.playback_channel_name
-            )
-        )
-    }
+    private val _duration = MutableStateFlow(0L)
+    val duration: StateFlow<Long> = _duration.asStateFlow()
 
-    /**
-     * Builds the lazy-resolving data source chain: cache-through [CacheDataSource] (same shared
-     * on-disk cache the old service used, via [PlaybackCache]) wrapped in a [ResolvingDataSource]
-     * that only resolves a real playable URL for a MediaItem the moment ExoPlayer actually needs
-     * its bytes - see TrackMediaItem.kt for the "yt:"/"it:" mediaId scheme this switches on.
-     * This is the same overall shape as MetroList's MusicService.createDataSourceFactory().
-     */
-    private fun createDataSourceFactory(): DataSource.Factory {
-        val cacheDataSourceFactory = PlaybackCache.cacheDataSourceFactory(this)
-        return ResolvingDataSource.Factory(cacheDataSourceFactory) { dataSpec ->
-            // customCacheKey doesn't always reliably reach DataSpec.key depending on how the
-            // MediaSource ended up being inferred, so don't depend on it alone - fall back to
-            // pulling the video id straight out of the placeholder URI we build in
-            // Track.toMediaItem() ("https://music.youtube.com/watch?v=<id>"). This is what was
-            // causing playback to buffer forever: the resolver branch below was silently never
-            // being entered, so ExoPlayer just kept trying to load that placeholder HTML page.
-            val mediaId = dataSpec.key
-            val youtubeVideoId = (mediaId?.let { MediaIdScheme.youtubeVideoIdOrNull(it) })
-                ?: dataSpec.uri.getQueryParameter("v")
+    private val _queue = MutableStateFlow<List<Track>>(emptyList())
+    val queue: StateFlow<List<Track>> = _queue.asStateFlow()
 
-            if (youtubeVideoId.isNullOrBlank()) {
-                Log.d("MusicService", "No YouTube id for uri=${dataSpec.uri} key=$mediaId - treating as direct URL")
-                return@Factory dataSpec // iTunes items already carry their real, direct preview URL.
+    private val _queueIndex = MutableStateFlow(-1)
+    val queueIndex: StateFlow<Int> = _queueIndex.asStateFlow()
+
+    private val _isShuffleEnabled = MutableStateFlow(false)
+    val isShuffleEnabled: StateFlow<Boolean> = _isShuffleEnabled.asStateFlow()
+
+    private val _repeatMode = MutableStateFlow(RepeatMode.OFF)
+    val repeatMode: StateFlow<RepeatMode> = _repeatMode.asStateFlow()
+
+    private val _isResolvingAutoplay = MutableStateFlow(false)
+    val isResolvingAutoplay: StateFlow<Boolean> = _isResolvingAutoplay.asStateFlow()
+
+    private val _sleepTimerEndsAt = MutableStateFlow<Long?>(null)
+    val sleepTimerEndsAt: StateFlow<Long?> = _sleepTimerEndsAt.asStateFlow()
+
+    private val _playbackSpeed = MutableStateFlow(1f)
+    val playbackSpeed: StateFlow<Float> = _playbackSpeed.asStateFlow()
+
+    private val _playbackError = MutableStateFlow<String?>(null)
+    val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
+
+    /** Wired up by MusicViewModel to MusicRepository.getAutoplayRecommendation. */
+    var autoplayProvider: (suspend (current: Track, excludeIds: Set<Long>, recentTracks: List<Track>) -> Track?)? = null
+
+    // Jam hooks - fired only for LOCALLY-initiated changes (see applyRemote* below for the
+    // receiving side, which deliberately does NOT go through these).
+    var onLocalSongChange: ((Track) -> Unit)? = null
+    var onLocalPlayPause: ((isPlaying: Boolean, positionMs: Long) -> Unit)? = null
+    var onLocalSeek: ((positionMs: Long) -> Unit)? = null
+    var onLocalStop: ((positionMs: Long) -> Unit)? = null
+
+    // ---------------------------------------------------------------------
+    // Internal bookkeeping
+    // ---------------------------------------------------------------------
+
+    private var errorRetryCount = 0
+    private var networkWaitJob: Job? = null
+    private var sleepTimerJob: Job? = null
+    private var isFetchingAutoplay = false
+    private var suppressNextLocalSongCallback = false
+    private val recentlyPlayed = ArrayDeque<Track>()
+
+    init {
+        val sessionToken = SessionToken(context, ComponentName(context, MusicService::class.java))
+        val future = MediaController.Builder(context, sessionToken).buildAsync()
+        future.addListener({
+            try {
+                val c = future.get()
+                controller = c
+                c.addListener(playerListener)
+                syncQueueFromController()
+                _isPlaying.value = c.isPlaying
+                _isShuffleEnabled.value = c.shuffleModeEnabled
+                controllerReady.complete(c)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to connect to MusicService", e)
+                controllerReady.completeExceptionally(e)
             }
+        }, ContextCompat.getMainExecutor(context))
 
-            val cacheKey = mediaId ?: "yt:$youtubeVideoId"
-
-            // Already fully cached on disk from an earlier play-through - CacheDataSource will
-            // serve it straight from disk, no need to resolve (or hit the network) at all.
-            val cache = PlaybackCache.get(this)
-            if (cache.isCached(cacheKey, dataSpec.position, if (dataSpec.length >= 0) dataSpec.length else 1)) {
-                Log.d("MusicService", "Already cached, skipping resolve: $cacheKey")
-                return@Factory dataSpec
-            }
-
-            resolvedUrlCache[cacheKey]
-                ?.takeIf { it.expiresAtMs > System.currentTimeMillis() }
-                ?.let {
-                    Log.d("MusicService", "Reusing resolved URL for $cacheKey")
-                    return@Factory dataSpec.withUri(Uri.parse(it.url))
-                }
-
-            Log.d("MusicService", "Resolving stream for videoId=$youtubeVideoId")
-            val resolvedUrl = try {
-                runBlocking {
-                    kotlinx.coroutines.withTimeout(15_000L) {
-                        InnerTubeStreamResolver.resolveStreamUrl(this@MusicService, youtubeVideoId)
+        // Drives playbackPosition/duration (Media3 has no continuous position callback) and
+        // proactively triggers autoplay shortly before the last queued item finishes, so the
+        // next track is already appended by the time ExoPlayer would otherwise run out.
+        scope.launch {
+            while (true) {
+                controller?.let { c ->
+                    _playbackPosition.value = c.currentPosition.coerceAtLeast(0L)
+                    _duration.value = c.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+                    val dur = _duration.value
+                    if (dur > 0 &&
+                        c.mediaItemCount > 0 &&
+                        c.currentMediaItemIndex == c.mediaItemCount - 1 &&
+                        dur - c.currentPosition < AUTOPLAY_LOOKAHEAD_MS
+                    ) {
+                        maybeAppendAutoplayTrack()
                     }
                 }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                Log.e("MusicService", "Timed out resolving $youtubeVideoId")
-                throw PlaybackException(
-                    getString(R.string.error_unknown_playback),
-                    e,
-                    PlaybackException.ERROR_CODE_TIMEOUT
-                )
-            } catch (e: PlaybackException) {
-                throw e
-            } catch (e: java.net.ConnectException) {
-                throw PlaybackException(
-                    getString(R.string.error_no_internet_playback),
-                    e,
-                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
-                )
-            } catch (e: java.net.UnknownHostException) {
-                throw PlaybackException(
-                    getString(R.string.error_no_internet_playback),
-                    e,
-                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
-                )
-            } catch (e: Exception) {
-                Log.e("MusicService", "Resolve failed for $youtubeVideoId", e)
-                throw PlaybackException(
-                    e.message ?: getString(R.string.error_unknown_playback),
-                    e,
-                    PlaybackException.ERROR_CODE_REMOTE_ERROR
-                )
+                delay(500)
             }
-
-            Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolvedUrl.take(80)}...")
-            resolvedUrlCache[cacheKey] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
-            dataSpec.withUri(Uri.parse(resolvedUrl))
         }
     }
+
+    private fun withController(block: (MediaController) -> Unit) {
+        scope.launch {
+            val c = controllerReady.await()
+            block(c)
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Queue / transport controls
+    // ---------------------------------------------------------------------
+
+    /** Replaces the whole queue and starts playback at [startIndex]. */
+    fun setQueue(tracks: List<Track>, startIndex: Int) {
+        if (tracks.isEmpty()) return
+        val clampedIndex = startIndex.coerceIn(0, tracks.size - 1)
+        errorRetryCount = 0
+        withController { c ->
+            c.setMediaItems(tracks.map { it.toMediaItem() }, clampedIndex, 0L)
+            c.playWhenReady = true
+            c.prepare()
+            c.play()
+        }
+    }
+
+    /** Appends a single track to the end of the current queue without interrupting playback. */
+    fun addToQueue(track: Track) {
+        withController { c -> c.addMediaItem(track.toMediaItem()) }
+    }
+
+    /** Starts playback of exactly this one track, replacing whatever was queued before -
+     *  used by "Play Full Song" from the Samples feed. */
+    fun play(track: Track) {
+        setQueue(listOf(track), 0)
+    }
+
+    fun pause() {
+        val pos = controller?.currentPosition ?: _playbackPosition.value
+        _isPlaying.value = false
+        withController { c -> c.pause() }
+        onLocalPlayPause?.invoke(false, pos)
+    }
+
+    fun resume() {
+        val pos = controller?.currentPosition ?: _playbackPosition.value
+        _isPlaying.value = true
+        withController { c -> c.play() }
+        onLocalPlayPause?.invoke(true, pos)
+    }
+
+    fun seekTo(positionMs: Long) {
+        _playbackPosition.value = positionMs
+        withController { c -> c.seekTo(positionMs) }
+        onLocalSeek?.invoke(positionMs)
+    }
+
+    fun skipNext() {
+        withController { c -> if (c.hasNextMediaItem()) c.seekToNextMediaItem() else c.seekToNext() }
+    }
+
+    /** Restarts the current track if more than a few seconds in (standard media-player
+     *  convention), otherwise jumps to the previous queue item. */
+    fun skipPrevious() {
+        withController { c ->
+            if (c.currentPosition > 3000L || !c.hasPreviousMediaItem()) {
+                c.seekTo(0L)
+            } else {
+                c.seekToPreviousMediaItem()
+            }
+        }
+    }
+
+    /** Fully stops playback and clears the queue - the mini player's "X" button. */
+    fun stopAndDismiss() {
+        val pos = controller?.currentPosition ?: _playbackPosition.value
+        withController { c ->
+            c.stop()
+            c.clearMediaItems()
+        }
+        _currentTrack.value = null
+        _queue.value = emptyList()
+        _queueIndex.value = -1
+        _isPlaying.value = false
+        _duration.value = 0L
+        onLocalStop?.invoke(pos)
+    }
+
+    fun toggleShuffle() {
+        withController { c ->
+            c.shuffleModeEnabled = !c.shuffleModeEnabled
+            _isShuffleEnabled.value = c.shuffleModeEnabled
+        }
+    }
+
+    fun cycleRepeatMode() {
+        val next = when (_repeatMode.value) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+        _repeatMode.value = next
+        withController { c ->
+            c.repeatMode = when (next) {
+                RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+                RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+                RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            }
+        }
+    }
+
+    fun playQueueItem(index: Int) {
+        withController { c ->
+            if (index in 0 until c.mediaItemCount) {
+                c.seekTo(index, 0L)
+                c.play()
+            }
+        }
+    }
+
+    fun removeFromQueue(index: Int) {
+        withController { c ->
+            if (index in 0 until c.mediaItemCount) {
+                c.removeMediaItem(index)
+            }
+        }
+    }
+
+    fun setSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        val durationMs = minutes * 60_000L
+        _sleepTimerEndsAt.value = System.currentTimeMillis() + durationMs
+        sleepTimerJob = scope.launch {
+            delay(durationMs)
+            controller?.pause()
+            _isPlaying.value = false
+            _sleepTimerEndsAt.value = null
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _sleepTimerEndsAt.value = null
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed
+        withController { c -> c.setPlaybackSpeed(speed) }
+    }
+
+    fun clearPlaybackError() {
+        _playbackError.value = null
+    }
+
+    // ---------------------------------------------------------------------
+    // Jam - applying a REMOTE update. Deliberately talks to the controller
+    // directly (not via play()/pause()/seekTo() above) so it never re-fires
+    // the onLocal* callbacks and echoes the update straight back to the room.
+    // ---------------------------------------------------------------------
+
+    fun applyRemoteSongChange(song: Song, positionMs: Long, isPlaying: Boolean, updatedAtServerMs: Long) {
+        val track = TrackSongBridge.toTrack(song)
+        // Compensate for time already spent in flight since the host's broadcast, so a
+        // slightly-late update doesn't leave a receiving/joining device behind.
+        val elapsed = (System.currentTimeMillis() - updatedAtServerMs).coerceAtLeast(0L)
+        val adjustedPosition = if (isPlaying) positionMs + elapsed else positionMs
+
+        suppressNextLocalSongCallback = true
+        scope.launch {
+            // Safety net: if for some reason no onMediaItemTransition ever fires for this
+            // (e.g. it's a no-op update for the song already playing), don't leave the next
+            // genuinely-local song change silently un-broadcast.
+            delay(2000)
+            suppressNextLocalSongCallback = false
+        }
+        withController { c ->
+            c.setMediaItems(listOf(track.toMediaItem()), 0, adjustedPosition.coerceAtLeast(0L))
+            c.playWhenReady = isPlaying
+            c.prepare()
+        }
+    }
+
+    fun applyRemotePlayPause(isPlaying: Boolean, positionMs: Long) {
+        withController { c ->
+            correctPositionIfDrifted(c, positionMs)
+            if (isPlaying) c.play() else c.pause()
+        }
+    }
+
+    fun applyRemoteSeek(positionMs: Long) {
+        withController { c -> correctPositionIfDrifted(c, positionMs, thresholdMs = 800L) }
+    }
+
+    private fun correctPositionIfDrifted(controller: MediaController, targetPositionMs: Long, thresholdMs: Long = 1200L) {
+        if (abs(controller.currentPosition - targetPositionMs) > thresholdMs) {
+            controller.seekTo(targetPositionMs)
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Controller state -> StateFlow mirroring
+    // ---------------------------------------------------------------------
 
     private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            _isBuffering.value = playbackState == Player.STATE_BUFFERING
+            if (playbackState == Player.STATE_READY) {
+                errorRetryCount = 0
+            }
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            syncQueueFromController()
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            _isShuffleEnabled.value = shuffleModeEnabled
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val track = mediaItem?.toTrackOrNull()
+            _currentTrack.value = track
+            syncQueueFromController()
+
+            if (track != null) {
+                recentlyPlayed.addFirst(track)
+                while (recentlyPlayed.size > MAX_RECENTLY_PLAYED) recentlyPlayed.removeLast()
+
+                if (suppressNextLocalSongCallback) {
+                    suppressNextLocalSongCallback = false
+                } else {
+                    onLocalSongChange?.invoke(track)
+                }
+            }
+            maybeAppendAutoplayTrack()
+        }
+
         override fun onPlayerError(error: PlaybackException) {
-            Log.e("MusicService", "Player error: ${error.errorCodeName}", error)
+            handlePlaybackError(error)
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        val session = mediaSession
-        if (session == null || !session.player.playWhenReady || session.player.mediaItemCount == 0) {
-            stopSelf()
-        }
-        super.onTaskRemoved(rootIntent)
+    private fun syncQueueFromController() {
+        val c = controller ?: return
+        _queue.value = (0 until c.mediaItemCount).mapNotNull { c.getMediaItemAt(it).toTrackOrNull() }
+        _queueIndex.value = c.currentMediaItemIndex
     }
 
-    override fun onDestroy() {
-        mediaSession?.run {
-            player.removeListener(playerListener)
-            player.release()
-            release()
-            mediaSession = null
+    // ---------------------------------------------------------------------
+    // Autoplay
+    // ---------------------------------------------------------------------
+
+    private fun maybeAppendAutoplayTrack() {
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) return
+        if (c.currentMediaItemIndex != c.mediaItemCount - 1) return // more queued up already
+        if (isFetchingAutoplay) return
+        val provider = autoplayProvider ?: return
+        val current = _currentTrack.value ?: return
+
+        isFetchingAutoplay = true
+        _isResolvingAutoplay.value = true
+        scope.launch {
+            try {
+                val excludeIds = _queue.value.map { it.id }.toSet()
+                val next = provider(current, excludeIds, recentlyPlayed.toList())
+                val c2 = controllerReady.await()
+                // Re-check we're still on the last item - the user may have skipped away or
+                // added their own next track while this was resolving.
+                if (next != null && c2.mediaItemCount > 0 && c2.currentMediaItemIndex == c2.mediaItemCount - 1) {
+                    c2.addMediaItem(next.toMediaItem())
+                }
+            } catch (e: Exception) {
+                // Autoplay is best-effort - a failure here just means playback stops at the
+                // end of the queue instead of continuing, not worth surfacing as an error.
+                Log.w(TAG, "Autoplay lookup failed", e)
+            } finally {
+                isFetchingAutoplay = false
+                _isResolvingAutoplay.value = false
+            }
         }
-        super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------------
+    // Error handling: retry transient failures, wait out real connectivity
+    // loss, otherwise skip the bad track and surface playbackError once.
+    // ---------------------------------------------------------------------
+
+    private fun handlePlaybackError(error: PlaybackException) {
+        val c = controller ?: return
+
+        if (!isOnline()) {
+            waitForNetworkThenRetry()
+            return
+        }
+
+        errorRetryCount++
+        if (errorRetryCount <= MAX_RETRIES_PER_TRACK) {
+            c.prepare()
+            return
+        }
+
+        errorRetryCount = 0
+        _playbackError.value = error.message ?: "Couldn't play this track."
+        if (c.hasNextMediaItem()) {
+            c.seekToNextMediaItem()
+            c.prepare()
+        } else {
+            c.pause()
+        }
+    }
+
+    private fun waitForNetworkThenRetry() {
+        if (networkWaitJob?.isActive == true) return
+        networkWaitJob = scope.launch {
+            while (!isOnline()) {
+                delay(2000)
+            }
+            errorRetryCount = 0
+            controller?.prepare()
+        }
+    }
+
+    private fun isOnline(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     companion object {
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "music_playback_channel"
+        private const val TAG = "MusicPlayer"
+        private const val MAX_RETRIES_PER_TRACK = 2
+        private const val MAX_RECENTLY_PLAYED = 20
+        private const val AUTOPLAY_LOOKAHEAD_MS = 8000L
     }
 }
