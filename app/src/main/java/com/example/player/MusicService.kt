@@ -132,24 +132,52 @@ class MusicService : MediaSessionService() {
     private fun createDataSourceFactory(): DataSource.Factory {
         val cacheDataSourceFactory = PlaybackCache.cacheDataSourceFactory(this)
         return ResolvingDataSource.Factory(cacheDataSourceFactory) { dataSpec ->
-            val mediaId = dataSpec.key ?: return@Factory dataSpec
+            // customCacheKey doesn't always reliably reach DataSpec.key depending on how the
+            // MediaSource ended up being inferred, so don't depend on it alone - fall back to
+            // pulling the video id straight out of the placeholder URI we build in
+            // Track.toMediaItem() ("https://music.youtube.com/watch?v=<id>"). This is what was
+            // causing playback to buffer forever: the resolver branch below was silently never
+            // being entered, so ExoPlayer just kept trying to load that placeholder HTML page.
+            val mediaId = dataSpec.key
+            val youtubeVideoId = (mediaId?.let { MediaIdScheme.youtubeVideoIdOrNull(it) })
+                ?: dataSpec.uri.getQueryParameter("v")
 
-            val youtubeVideoId = MediaIdScheme.youtubeVideoIdOrNull(mediaId)
-                ?: return@Factory dataSpec // iTunes items already carry their real, direct preview URL.
+            if (youtubeVideoId.isNullOrBlank()) {
+                Log.d("MusicService", "No YouTube id for uri=${dataSpec.uri} key=$mediaId - treating as direct URL")
+                return@Factory dataSpec // iTunes items already carry their real, direct preview URL.
+            }
+
+            val cacheKey = mediaId ?: "yt:$youtubeVideoId"
 
             // Already fully cached on disk from an earlier play-through - CacheDataSource will
             // serve it straight from disk, no need to resolve (or hit the network) at all.
             val cache = PlaybackCache.get(this)
-            if (cache.isCached(mediaId, dataSpec.position, if (dataSpec.length >= 0) dataSpec.length else 1)) {
+            if (cache.isCached(cacheKey, dataSpec.position, if (dataSpec.length >= 0) dataSpec.length else 1)) {
+                Log.d("MusicService", "Already cached, skipping resolve: $cacheKey")
                 return@Factory dataSpec
             }
 
-            resolvedUrlCache[mediaId]
+            resolvedUrlCache[cacheKey]
                 ?.takeIf { it.expiresAtMs > System.currentTimeMillis() }
-                ?.let { return@Factory dataSpec.withUri(Uri.parse(it.url)) }
+                ?.let {
+                    Log.d("MusicService", "Reusing resolved URL for $cacheKey")
+                    return@Factory dataSpec.withUri(Uri.parse(it.url))
+                }
 
+            Log.d("MusicService", "Resolving stream for videoId=$youtubeVideoId")
             val resolvedUrl = try {
-                runBlocking { InnerTubeStreamResolver.resolveStreamUrl(this@MusicService, youtubeVideoId) }
+                runBlocking {
+                    kotlinx.coroutines.withTimeout(15_000L) {
+                        InnerTubeStreamResolver.resolveStreamUrl(this@MusicService, youtubeVideoId)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.e("MusicService", "Timed out resolving $youtubeVideoId")
+                throw PlaybackException(
+                    getString(R.string.error_unknown_playback),
+                    e,
+                    PlaybackException.ERROR_CODE_TIMEOUT
+                )
             } catch (e: PlaybackException) {
                 throw e
             } catch (e: java.net.ConnectException) {
@@ -165,6 +193,7 @@ class MusicService : MediaSessionService() {
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
                 )
             } catch (e: Exception) {
+                Log.e("MusicService", "Resolve failed for $youtubeVideoId", e)
                 throw PlaybackException(
                     e.message ?: getString(R.string.error_unknown_playback),
                     e,
@@ -172,7 +201,8 @@ class MusicService : MediaSessionService() {
                 )
             }
 
-            resolvedUrlCache[mediaId] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
+            Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolvedUrl.take(80)}...")
+            resolvedUrlCache[cacheKey] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
             dataSpec.withUri(Uri.parse(resolvedUrl))
         }
     }
