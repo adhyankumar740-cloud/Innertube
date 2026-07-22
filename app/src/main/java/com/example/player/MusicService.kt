@@ -9,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -66,7 +67,7 @@ class MusicService : MediaSessionService() {
     // resolved this session doesn't need a fresh network round trip every time ExoPlayer reopens
     // its data source (e.g. after a seek outside the cached range). Mirrors MetroList's own
     // songUrlCache TTL pattern in MusicService.createDataSourceFactory().
-    private data class ResolvedUrl(val url: String, val expiresAtMs: Long)
+    private data class ResolvedUrl(val url: String, val contentLength: Long?, val expiresAtMs: Long)
     private val resolvedUrlCache = object : LinkedHashMap<String, ResolvedUrl>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ResolvedUrl>?) = size > 30
     }
@@ -170,11 +171,11 @@ class MusicService : MediaSessionService() {
                 ?.takeIf { it.expiresAtMs > System.currentTimeMillis() }
                 ?.let {
                     Log.d("MusicService", "Reusing resolved URL for $cacheKey")
-                    return@Factory dataSpec.withUri(Uri.parse(it.url))
+                    return@Factory boundedDataSpec(dataSpec, it.url, it.contentLength)
                 }
 
             Log.d("MusicService", "Resolving stream for videoId=$youtubeVideoId")
-            val resolvedUrl = try {
+            val resolved = try {
                 runBlocking {
                     kotlinx.coroutines.withTimeout(15_000L) {
                         InnerTubeStreamResolver.resolveStreamUrl(this@MusicService, youtubeVideoId)
@@ -210,18 +211,29 @@ class MusicService : MediaSessionService() {
                 )
             }
 
-            Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolvedUrl.take(80)}...")
-            resolvedUrlCache[cacheKey] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
-            // Keep requesting an explicit bounded Range (dropping subrange entirely made
-            // googlevideo fail to start playback at all - it needs a real Range header, not a
-            // bare unbounded GET) but make the cap huge instead of CHUNK_LENGTH's old 512KB.
-            // resolveDataSpec only runs once per data source open (nothing here re-enters it for
-            // a "next chunk"), so a small cap made every track hard-stop long before its real end
-            // and ExoPlayer would read that as the track finishing, auto-advancing into the next
-            // queue item mid-song. A cap this large is functionally "the rest of the file" for any
-            // real track, while still giving the CDN the bounded Range request it wants.
-            dataSpec.withUri(Uri.parse(resolvedUrl)).subrange(dataSpec.uriPositionOffset, MAX_STREAM_RANGE_LENGTH)
+            Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolved.url.take(80)}... (contentLength=${resolved.contentLength})")
+            resolvedUrlCache[cacheKey] = ResolvedUrl(resolved.url, resolved.contentLength, System.currentTimeMillis() + resolvedUrlTtlMs)
+            boundedDataSpec(dataSpec, resolved.url, resolved.contentLength)
         }
+    }
+
+    /**
+     * googlevideo needs an explicit, bounded Range header - a Range-less GET fails outright, and
+     * a Range whose upper bound exceeds the real file size can make some edges echo the
+     * *requested* length back in Content-Length instead of what's actually available, which trips
+     * OkHttp's "unexpected end of stream" check the moment the real file ends early (surfaces to
+     * the user as generic "Source error"). So the Range has to match the real remaining length -
+     * from the format's own contentLength (as reported by the InnerTube API), never a guessed cap.
+     * Falls back to a generous guess only on the rare format that doesn't report a contentLength.
+     */
+    private fun boundedDataSpec(dataSpec: DataSpec, resolvedUrl: String, contentLength: Long?): DataSpec {
+        val remaining = if (contentLength != null && contentLength > dataSpec.position) {
+            contentLength - dataSpec.position
+        } else {
+            FALLBACK_RANGE_LENGTH
+        }
+        return dataSpec.withUri(Uri.parse(resolvedUrl))
+            .subrange(dataSpec.uriPositionOffset, remaining)
     }
 
     private val playerListener = object : Player.Listener {
@@ -253,9 +265,8 @@ class MusicService : MediaSessionService() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "music_playback_channel"
-        // Bounded but effectively "rest of file" for any real audio track - large enough that no
-        // track will ever hit this ceiling, while still giving googlevideo the explicit Range
-        // header it needs (a bare Range-less GET fails to start playback entirely).
-        private const val MAX_STREAM_RANGE_LENGTH = 2L * 1024 * 1024 * 1024 // 2GB
+        // Only used on the rare format that doesn't report a contentLength at all - generous
+        // enough to cover any real track when we're forced to guess.
+        private const val FALLBACK_RANGE_LENGTH = 200L * 1024 * 1024 // 200MB
     }
 }
