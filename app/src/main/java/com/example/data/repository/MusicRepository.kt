@@ -465,30 +465,63 @@ class MusicRepository(
     }
 
     /**
-     * Autoplay recommendation for when the queue naturally ends. YouTube deprecated
-     * the search.list `relatedToVideoId` parameter in 2023 (no longer supported), so
-     * there's no public API for "true" related-video recommendations. This searches
-     * genre-first, so "next" is a genuinely different song in the same genre rather
-     * than just more of the same artist/channel (the old artist-only behaviour).
-     * [excludeIds] (current queue + recent play history) and [recentTracks] (the
-     * same, as full Track objects) are both used - ids to skip exact repeats, and
-     * the normalized title+artist of [recentTracks] to skip re-uploads of a song
-     * that was already just played under a different video id.
+     * Autoplay recommendation for when the queue naturally ends.
+     *
+     * INFINITE-QUEUE FIX: this used to go straight to keyword search ("$genre songs" etc.),
+     * which YouTube's search endpoint answers with the *same* ~15 results every time for the
+     * same query string - so a chain of autoplay calls would exhaust the exact same fixed
+     * pool within just one or two songs once a few of those got excluded as already-played,
+     * and legitimately return null (not an error - just "nothing new found"), which stopped
+     * playback dead. Now this tries THREE tiers, in order, and only gives up if all three
+     * come up empty:
+     *   1. YouTube Music's own "radio" queue for [currentTrack] (InnerTubeMusicService.getRadio) -
+     *      the actual feature behind "Start radio"/Autoplay in YT Music itself, built to be
+     *      endless (it chains YouTube's own automix + continuation tokens server-side), so it
+     *      doesn't run dry the way a static keyword search does. If everything in the first
+     *      page is already excluded, one continuation page is also tried before falling
+     *      through.
+     *   2. The original genre-qualified keyword search (still useful as a fallback for
+     *      tracks with no [Track.youtubeVideoId], or if the radio call itself errors).
+     *   3. Last resort: replay something from [recentTracks] (anything except the track that
+     *      just finished). The user explicitly wants uninterrupted continuous playback over
+     *      strict novelty, so a repeat beats dead silence.
+     * [excludeIds] (current queue + recent play history) and [recentTracks] (the same, as full
+     * Track objects) are both used - ids to skip exact repeats, and the normalized
+     * title+artist of [recentTracks] to skip re-uploads of a song already just played under a
+     * different video id.
      */
     suspend fun getAutoplayRecommendation(
         currentTrack: Track,
         excludeIds: Set<Long>,
         recentTracks: List<Track> = emptyList()
     ): Track? = withContext(Dispatchers.IO) {
-        val genre = resolveGenre(currentTrack)
         val excludeKeys = (recentTracks + currentTrack).map { normalizedSongKey(it) }.toSet()
+        var lastError: Exception? = null
+        var anyCallSucceeded = false
 
-        // Genre is a hard requirement for Auto-Next, so every query below is
-        // genre-qualified - "style" match is never traded away for personalization.
-        // What history *does* influence is which genre-matching song gets picked:
-        // if the user has a favorite artist (from search/listening history) who
-        // also fits this genre, that artist's genre-matching songs are tried first,
-        // ahead of the generic "$genre songs" search.
+        fun pick(candidates: List<Track>): Track? =
+            candidates.firstOrNull { it.id !in excludeIds && isNormalSongDuration(it) && normalizedSongKey(it) !in excludeKeys }
+
+        // Tier 1: real radio queue.
+        val videoId = currentTrack.youtubeVideoId
+        if (!videoId.isNullOrBlank()) {
+            try {
+                val (firstPage, continuation) = InnerTubeMusicService.getRadio(videoId)
+                anyCallSucceeded = true
+                pick(firstPage)?.let { return@withContext it.copy(genre = resolveGenre(currentTrack)) }
+
+                if (continuation != null) {
+                    val (secondPage, _) = InnerTubeMusicService.getRadio(videoId, continuation)
+                    pick(secondPage)?.let { return@withContext it.copy(genre = resolveGenre(currentTrack)) }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                lastError = e
+            }
+        }
+
+        // Tier 2: genre-qualified keyword search (original behaviour, kept as a fallback).
+        val genre = resolveGenre(currentTrack)
         val profile = getPersonalizationProfile()
         val favoriteArtistInGenre = profile.topArtists
             .firstOrNull { it.isNotBlank() && !it.equals(currentTrack.artist, ignoreCase = true) }
@@ -500,44 +533,26 @@ class MusicRepository(
             currentTrack.artist
         ).filter { it.isNotBlank() }.distinct()
 
-        // NETWORK-RETRY FIX (root cause of "song ends in background and it
-        // just stops instead of moving to the next one"): every search call
-        // below used to catch its own exception and silently fall through as
-        // "no candidates for this query", and the whole function had an outer
-        // catch that did the same - swallow and return null. That meant a
-        // genuine network failure (the exact connectivity blip
-        // waitForNetworkThenRetry() in MusicPlayer exists to cover, right
-        // when the screen turns off) looked IDENTICAL, by the time it
-        // reached triggerAutoplay(), to "no matching song exists for this
-        // genre". MusicPlayer's own network-aware retry (isOnline() check ->
-        // wait for network -> retry) only runs when an exception actually
-        // reaches it - so it never ran for this path; playback just showed
-        // "Koi agla gaana nahi mila" and gave up, even if the network came
-        // back a second later. Now: if EVERY query fails with an exception
-        // (as opposed to succeeding but genuinely finding no match), that's
-        // a real failure and gets rethrown, so the caller can tell the two
-        // cases apart and retry appropriately instead of giving up for good.
-        var lastError: Exception? = null
-        var anyQuerySucceeded = false
-
         for (query in queries) {
             val candidateTracks: List<Track> = try {
-                InnerTubeMusicService.search(query = query, limit = 15).also { anyQuerySucceeded = true }
+                InnerTubeMusicService.search(query = query, limit = 15).also { anyCallSucceeded = true }
             } catch (e: Exception) {
                 e.printStackTrace()
                 lastError = e
                 emptyList()
             }
-
-            val candidate = candidateTracks
-                .filter { it.id !in excludeIds && isNormalSongDuration(it) }
-                .firstOrNull { normalizedSongKey(it) !in excludeKeys }
-            // Carry the resolved genre forward so the next hop in an autoplay
-            // chain doesn't have to re-look it up and doesn't drift genre.
-            if (candidate != null) return@withContext candidate.copy(genre = genre)
+            pick(candidateTracks)?.let { return@withContext it.copy(genre = genre) }
         }
 
-        if (!anyQuerySucceeded && lastError != null) throw lastError
+        // A genuine failure (every tier 1/2 network call threw, none ever came back with
+        // real data) is NOT the same as "found nothing new" - rethrow so the caller
+        // (MusicPlayer) can tell the two apart and back off/retry instead of giving up.
+        if (!anyCallSucceeded && lastError != null) throw lastError
+
+        // Tier 3: last resort, never leave the user with dead silence - replay something
+        // already heard rather than stopping the queue outright.
+        recentTracks.firstOrNull { it.id != currentTrack.id }?.let { return@withContext it.copy(genre = genre) }
+
         null
     }
 
