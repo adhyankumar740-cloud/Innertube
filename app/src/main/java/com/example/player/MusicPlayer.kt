@@ -64,6 +64,7 @@ class MusicPlayer(private val context: Context) {
 
     private var controller: MediaController? = null
     private val controllerReady = CompletableDeferred<MediaController>()
+    private var stallWatchdogJob: Job? = null
 
     // ---------------------------------------------------------------------
     // Public state
@@ -378,6 +379,11 @@ class MusicPlayer(private val context: Context) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             _isBuffering.value = playbackState == Player.STATE_BUFFERING
+            if (playbackState == Player.STATE_BUFFERING) {
+                startStallWatchdog()
+            } else {
+                stallWatchdogJob?.cancel()
+            }
             if (playbackState == Player.STATE_READY) {
                 errorRetryCount = 0
             }
@@ -392,6 +398,7 @@ class MusicPlayer(private val context: Context) {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            stallWatchdogJob?.cancel()
             val track = mediaItem?.toTrackOrNull()
             _currentTrack.value = track
             syncQueueFromController()
@@ -460,6 +467,22 @@ class MusicPlayer(private val context: Context) {
     // loss, otherwise skip the bad track and surface playbackError once.
     // ---------------------------------------------------------------------
 
+    // See STALL_WATCHDOG_MS's comment: a throttled CDN connection can trickle data slowly enough
+    // that ExoPlayer never leaves STATE_BUFFERING and never throws an error, so nothing here would
+    // otherwise notice or recover. If we're still buffering once the timeout elapses, force a
+    // fresh HTTP request at the same position - the same thing manually seeking does.
+    private fun startStallWatchdog() {
+        stallWatchdogJob?.cancel()
+        stallWatchdogJob = scope.launch {
+            delay(STALL_WATCHDOG_MS)
+            val c = controller ?: return@launch
+            if (c.playbackState == Player.STATE_BUFFERING) {
+                Log.w(TAG, "Buffering stalled ${STALL_WATCHDOG_MS}ms at position ${c.currentPosition} - nudging with self-seek")
+                c.seekTo(c.currentPosition)
+            }
+        }
+    }
+
     private fun handlePlaybackError(error: PlaybackException) {
         val c = controller ?: return
 
@@ -515,6 +538,13 @@ class MusicPlayer(private val context: Context) {
     companion object {
         private const val TAG = "MusicPlayer"
         private const val MAX_RETRIES_PER_TRACK = 2
+        // googlevideo.com CDN can throttle a connection to a slow trickle instead of failing it
+        // outright - bytes keep arriving just not fast enough to keep up with playback, so
+        // ExoPlayer sits in STATE_BUFFERING forever with no IOException ever thrown (no error
+        // event, nothing for handlePlaybackError's retry logic to catch). The only fix is a fresh
+        // HTTP request, which is exactly what manually seeking does. This watchdog automates that:
+        // if still buffering after this long, self-nudge with a seek to the current position.
+        private const val STALL_WATCHDOG_MS = 12_000L
         private const val MAX_RECENTLY_PLAYED = 20
         private const val AUTOPLAY_LOOKAHEAD_MS = 8000L
     }
