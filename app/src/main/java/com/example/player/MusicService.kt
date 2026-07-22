@@ -212,7 +212,13 @@ class MusicService : MediaSessionService() {
 
             Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolvedUrl.take(80)}...")
             resolvedUrlCache[cacheKey] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
-            dataSpec.withUri(Uri.parse(resolvedUrl)).subrange(dataSpec.uriPositionOffset, CHUNK_LENGTH)
+            // NOTE: previously capped to CHUNK_LENGTH (512KB) via .subrange(...), on the assumption
+            // that ExoPlayer would transparently re-enter this resolver for the next chunk once one
+            // completed. It doesn't - resolveDataSpec only runs once per data source open, so that cap
+            // made every track hard-stop after ~512KB (well before the real end of the file), which
+            // ExoPlayer read as the track finishing and auto-advanced into the next queue item mid-song.
+            // Let the full resolved length stream through instead.
+            dataSpec.withUri(Uri.parse(resolvedUrl))
         }
     }
 
@@ -245,10 +251,5 @@ class MusicService : MediaSessionService() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "music_playback_channel"
-        // Matches MetroList's own MusicService - googlevideo.com CDN links respond far more
-        // reliably to bounded Range requests than to open-ended "give me the rest of the file"
-        // ones. ExoPlayer's progressive loader transparently re-enters this resolver for the
-        // next chunk once one completes, so this doesn't cap how much of a track can play.
-        private const val CHUNK_LENGTH = 512 * 1024L
     }
 }
