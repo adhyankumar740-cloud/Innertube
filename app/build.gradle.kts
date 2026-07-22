@@ -120,6 +120,7 @@ dependencies {
   implementation(libs.media3.ui)
   implementation(libs.media3.common)
   implementation(libs.media3.database)
+  implementation(libs.media3.datasource.okhttp)
   implementation(libs.converter.moshi)
   // Backend for everything: the app's own account system (Auth - User ID +
   // password sign up/login/recovery, see AuthViewModel.kt), Jam (group
