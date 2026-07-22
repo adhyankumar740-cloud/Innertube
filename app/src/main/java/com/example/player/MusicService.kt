@@ -10,6 +10,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -25,6 +26,7 @@ import androidx.media3.session.MediaSessionService
 import com.example.MainActivity
 import com.example.R
 import com.example.data.network.InnerTubeStreamResolver
+import com.example.data.youtube.YTPlayerUtils
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -239,7 +241,51 @@ class MusicService : MediaSessionService() {
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
             Log.e("MusicService", "Player error: ${error.errorCodeName}", error)
+            handleStreamRejection(error)
         }
+    }
+
+    /**
+     * This is the other half of the WEB_REMIX self-heal that [createDataSourceFactory] sets up
+     * (see the comment on the `webRemixFailedIds`/`markWebRemixFailed` check there): WEB_REMIX
+     * skips HEAD validation and is handed straight to ExoPlayer on the assumption that a URL
+     * which 403s on HEAD can still serve fine on ExoPlayer's real byte-range GET - but when that
+     * assumption is wrong (stale cipher/poToken), nothing was ever calling
+     * [YTPlayerUtils.markWebRemixFailed], so every single retry re-tried the exact same broken
+     * WEB_REMIX client and never fell through to the validated fallback clients. On top of that,
+     * [resolvedUrlCache] would keep re-serving that same broken URL for its whole TTL, so even a
+     * fresh resolve attempt wouldn't help. Both gaps mean a track whose WEB_REMIX link is bad
+     * would buffer/error and retry (see MusicPlayer.handlePlaybackError) against the same dead
+     * URL over and over instead of ever recovering - this is what fixes that.
+     */
+    private fun handleStreamRejection(error: PlaybackException) {
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        val youtubeVideoId = MediaIdScheme.youtubeVideoIdOrNull(mediaId) ?: return
+        if (!isHttpStreamRejection(error)) return
+
+        Log.w(
+            "MusicService",
+            "Stream rejected (${error.errorCodeName}) for $youtubeVideoId - marking WEB_REMIX " +
+                "failed so the next resolve falls through to a validated fallback client"
+        )
+        YTPlayerUtils.markWebRemixFailed(youtubeVideoId)
+        // Otherwise the retry MusicPlayer is about to trigger would just get served this exact
+        // same stale/broken URL straight back out of the cache before ever reaching the client
+        // fallback logic.
+        resolvedUrlCache.remove(mediaId)
+    }
+
+    /** Walks the cause chain for an HTTP-level rejection (e.g. the 403 a stale/expired
+     *  googlevideo signature or poToken produces) as opposed to a generic decode/network error
+     *  that isn't specific to this stream URL being bad. */
+    private fun isHttpStreamRejection(error: PlaybackException): Boolean {
+        if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) return true
+        var cause: Throwable? = error.cause
+        while (cause != null) {
+            if (cause is HttpDataSource.InvalidResponseCodeException) return true
+            cause = cause.cause
+        }
+        return false
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
