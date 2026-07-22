@@ -212,13 +212,15 @@ class MusicService : MediaSessionService() {
 
             Log.d("MusicService", "Resolved $youtubeVideoId -> ${resolvedUrl.take(80)}...")
             resolvedUrlCache[cacheKey] = ResolvedUrl(resolvedUrl, System.currentTimeMillis() + resolvedUrlTtlMs)
-            // NOTE: previously capped to CHUNK_LENGTH (512KB) via .subrange(...), on the assumption
-            // that ExoPlayer would transparently re-enter this resolver for the next chunk once one
-            // completed. It doesn't - resolveDataSpec only runs once per data source open, so that cap
-            // made every track hard-stop after ~512KB (well before the real end of the file), which
-            // ExoPlayer read as the track finishing and auto-advanced into the next queue item mid-song.
-            // Let the full resolved length stream through instead.
-            dataSpec.withUri(Uri.parse(resolvedUrl))
+            // Keep requesting an explicit bounded Range (dropping subrange entirely made
+            // googlevideo fail to start playback at all - it needs a real Range header, not a
+            // bare unbounded GET) but make the cap huge instead of CHUNK_LENGTH's old 512KB.
+            // resolveDataSpec only runs once per data source open (nothing here re-enters it for
+            // a "next chunk"), so a small cap made every track hard-stop long before its real end
+            // and ExoPlayer would read that as the track finishing, auto-advancing into the next
+            // queue item mid-song. A cap this large is functionally "the rest of the file" for any
+            // real track, while still giving the CDN the bounded Range request it wants.
+            dataSpec.withUri(Uri.parse(resolvedUrl)).subrange(dataSpec.uriPositionOffset, MAX_STREAM_RANGE_LENGTH)
         }
     }
 
@@ -251,5 +253,9 @@ class MusicService : MediaSessionService() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "music_playback_channel"
+        // Bounded but effectively "rest of file" for any real audio track - large enough that no
+        // track will ever hit this ceiling, while still giving googlevideo the explicit Range
+        // header it needs (a bare Range-less GET fails to start playback entirely).
+        private const val MAX_STREAM_RANGE_LENGTH = 2L * 1024 * 1024 * 1024 // 2GB
     }
 }
