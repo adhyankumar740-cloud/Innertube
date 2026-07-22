@@ -2,10 +2,14 @@ package com.example.player
 
 import android.content.Context
 import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import com.metrolist.innertube.YouTube
+import okhttp3.OkHttpClient
 import java.io.File
 
 // Ek hi on-disk audio cache poore app ke liye:
@@ -35,10 +39,22 @@ object PlaybackCache {
         }
     }
 
-    // InnerTube-resolved stream URLs are pre-signed googlevideo.com CDN links -
-    // no auth header needed (unlike the old relay's /audio endpoint).
-    private fun upstreamHttpDataSourceFactory(): DefaultHttpDataSource.Factory {
-        return DefaultHttpDataSource.Factory()
+    // InnerTube-resolved stream URLs are pre-signed googlevideo.com CDN links - no auth header
+    // needed (unlike the old relay's /audio endpoint). This MUST go through OkHttp, not
+    // DefaultHttpDataSource (HttpURLConnection) - googlevideo.com's CDN frequently buffers then
+    // fails ("source error") on the plain HttpURLConnection-based data source, which is exactly
+    // why MetroList's own MusicService.createCacheDataSource() uses OkHttpDataSource here too.
+    // Also honors YouTube.proxy like every other network call in this app (PlayerJsFetcher,
+    // PoTokenWebView, YTPlayerUtils) so a configured proxy covers the actual audio fetch too,
+    // not just the API calls that find the stream URL in the first place.
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .proxy(YouTube.proxy)
+            .build()
+    }
+
+    private fun upstreamHttpDataSourceFactory(context: Context): DataSource.Factory {
+        return DefaultDataSource.Factory(context, OkHttpDataSource.Factory(okHttpClient))
     }
 
     // ExoPlayer isi factory se media source banata hai - cache-through
@@ -47,7 +63,7 @@ object PlaybackCache {
     fun cacheDataSourceFactory(context: Context): CacheDataSource.Factory {
         return CacheDataSource.Factory()
             .setCache(get(context))
-            .setUpstreamDataSourceFactory(upstreamHttpDataSourceFactory())
+            .setUpstreamDataSourceFactory(upstreamHttpDataSourceFactory(context))
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 }
