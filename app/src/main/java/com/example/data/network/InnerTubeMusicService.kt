@@ -5,6 +5,7 @@ import com.example.data.model.TrackSource
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.SongItem
+import com.metrolist.innertube.models.WatchEndpoint
 import com.metrolist.innertube.models.YTItem
 import com.metrolist.innertube.models.YouTubeLocale
 import java.util.Locale
@@ -83,6 +84,25 @@ object InnerTubeMusicService {
             .flatMap { it.items }
             .map { it.title }
             .distinct()
+    }
+
+    /**
+     * YouTube Music's real "radio"/Up-Next queue for a song (the same feature behind the
+     * app's own Autoplay/Radio button, and behind YT Music's "Start radio") - a
+     * server-curated continuous queue, not a keyword search. This is what
+     * MusicRepository.getAutoplayRecommendation() now tries FIRST for auto-next, because a
+     * generic "$genre songs" search keeps returning the same ~15 videos for the same query
+     * every time, which runs out fast once a few get excluded as already-played. The radio
+     * queue is both bigger per call (it already resolves YouTube's own "automix"/continuation
+     * chaining server-side) and, unlike a keyword search, actually meant to be endless.
+     * Returns the queue items plus a continuation token so a caller can pull further pages
+     * from the same radio if every item in this page is filtered out as already played.
+     */
+    suspend fun getRadio(videoId: String, continuation: String? = null): Pair<List<Track>, String?> {
+        ensureLocale()
+        val endpoint = WatchEndpoint(videoId = videoId, playlistId = "RD$videoId")
+        val result = YouTube.next(endpoint, continuation).getOrThrow()
+        return result.items.map { it.toTrack() } to result.continuation
     }
 
     /**
