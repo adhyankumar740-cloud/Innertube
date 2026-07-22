@@ -431,11 +431,17 @@ class MusicPlayer(private val context: Context) {
     // Autoplay
     // ---------------------------------------------------------------------
 
+    // Backs off a lookup retry after a real failure (see maybeAppendAutoplayTrack's catch
+    // block) instead of letting the position-polling loop in init{} hammer the same failing
+    // network call again every ~500ms with no delay in between.
+    private var autoplayRetryJob: Job? = null
+
     private fun maybeAppendAutoplayTrack() {
         val c = controller ?: return
         if (c.mediaItemCount == 0) return
         if (c.currentMediaItemIndex != c.mediaItemCount - 1) return // more queued up already
         if (isFetchingAutoplay) return
+        if (autoplayRetryJob?.isActive == true) return // already backing off from a previous failure
         val provider = autoplayProvider ?: return
         val current = _currentTrack.value ?: return
 
@@ -452,13 +458,37 @@ class MusicPlayer(private val context: Context) {
                     c2.addMediaItem(next.toMediaItem())
                 }
             } catch (e: Exception) {
-                // Autoplay is best-effort - a failure here just means playback stops at the
-                // end of the queue instead of continuing, not worth surfacing as an error.
-                Log.w(TAG, "Autoplay lookup failed", e)
+                // BACKGROUND-STOP FIX: a real network/resolve failure right as the queue ran
+                // out used to just be logged and dropped here - but the position-polling loop
+                // in init{} re-calls this every ~500ms for as long as we're sitting at the end
+                // of the queue, so with no backoff that turned into a tight retry loop hitting
+                // the network twice a second in the background. Besides wasting battery, that
+                // pattern is exactly what triggers many phones' aggressive battery managers
+                // (Samsung/Xiaomi/Oppo/Vivo/etc.) to freeze or kill a background app's process -
+                // which is what actually stopped playback and dropped the system media
+                // notification, only to "resume by itself" once the app was reopened and the
+                // pending retry finally succeeded. Now: on failure, wait for real connectivity
+                // (or a fixed cooldown for a non-connectivity error) before trying again.
+                Log.w(TAG, "Autoplay lookup failed, backing off before retry", e)
+                scheduleAutoplayRetry()
             } finally {
                 isFetchingAutoplay = false
                 _isResolvingAutoplay.value = false
             }
+        }
+    }
+
+    private fun scheduleAutoplayRetry() {
+        if (autoplayRetryJob?.isActive == true) return
+        autoplayRetryJob = scope.launch {
+            if (!isOnline()) {
+                while (!isOnline()) delay(2000)
+            } else {
+                // Not a connectivity drop (e.g. a transient API/resolve error) - a short fixed
+                // cooldown instead of hammering the same failing call again immediately.
+                delay(AUTOPLAY_RETRY_COOLDOWN_MS)
+            }
+            maybeAppendAutoplayTrack()
         }
     }
 
@@ -547,5 +577,9 @@ class MusicPlayer(private val context: Context) {
         private const val STALL_WATCHDOG_MS = 12_000L
         private const val MAX_RECENTLY_PLAYED = 20
         private const val AUTOPLAY_LOOKAHEAD_MS = 8000L
+        // Fixed cooldown before retrying a failed autoplay lookup that wasn't caused by a
+        // connectivity drop (isOnline() was true) - avoids hammering the same failing call
+        // every ~500ms via the position-polling loop in init{}.
+        private const val AUTOPLAY_RETRY_COOLDOWN_MS = 5000L
     }
 }
