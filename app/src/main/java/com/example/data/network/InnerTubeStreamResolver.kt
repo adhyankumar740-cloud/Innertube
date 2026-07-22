@@ -15,12 +15,14 @@ import com.example.data.youtube.YTPlayerUtils
  */
 object InnerTubeStreamResolver {
 
+    data class ResolvedStream(val url: String, val contentLength: Long?)
+
     /**
      * @throws Exception if every client in the fallback chain failed to
      * produce a playable format - callers should catch this the same way
      * they used to catch RelayService.resolve() failures.
      */
-    suspend fun resolveStreamUrl(context: Context, videoId: String): String {
+    suspend fun resolveStreamUrl(context: Context, videoId: String): ResolvedStream {
         val connectivityManager =
             context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val playbackData = YTPlayerUtils.playerResponseForPlayback(
@@ -28,6 +30,6 @@ object InnerTubeStreamResolver {
             audioQuality = AudioQuality.AUTO,
             connectivityManager = connectivityManager
         ).getOrThrow()
-        return playbackData.streamUrl
+        return ResolvedStream(playbackData.streamUrl, playbackData.format.contentLength)
     }
 }
