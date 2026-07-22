@@ -463,6 +463,16 @@ class MusicPlayer(private val context: Context) {
     private fun handlePlaybackError(error: PlaybackException) {
         val c = controller ?: return
 
+        // error.message on a PlaybackException coming through MediaController is almost always
+        // just Media3's generic wrapper text ("Source error") for ANY IOException thrown at the
+        // data-source layer - the real reason (403 from a stale/rejected stream URL, timeout,
+        // resolve failure, etc.) lives in error.cause instead. Across the MediaController IPC
+        // boundary the cause is flattened to a RemoteException, but its message string still
+        // carries the original cause's message through - so prefer that over the useless
+        // wrapper text. This is also logged so it shows up in logcat even before retries exhaust.
+        val diagnosticMessage = error.cause?.message ?: error.message ?: "Couldn't play this track."
+        Log.e(TAG, "Playback error (errorCode=${error.errorCodeName}, attempt=${errorRetryCount + 1}): $diagnosticMessage", error)
+
         if (!isOnline()) {
             waitForNetworkThenRetry()
             return
@@ -475,7 +485,7 @@ class MusicPlayer(private val context: Context) {
         }
 
         errorRetryCount = 0
-        _playbackError.value = error.message ?: "Couldn't play this track."
+        _playbackError.value = diagnosticMessage
         if (c.hasNextMediaItem()) {
             c.seekToNextMediaItem()
             c.prepare()
