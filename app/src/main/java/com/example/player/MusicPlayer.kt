@@ -456,6 +456,19 @@ class MusicPlayer(private val context: Context) {
                 // added their own next track while this was resolving.
                 if (next != null && c2.mediaItemCount > 0 && c2.currentMediaItemIndex == c2.mediaItemCount - 1) {
                     c2.addMediaItem(next.toMediaItem())
+                    // BAR-DISAPPEARS FIX: if the network round trip above took long enough that
+                    // ExoPlayer already reached STATE_ENDED before this item landed, adding a
+                    // new MediaItem to an already-ended timeline does NOT resume playback on its
+                    // own (a well-known Media3/ExoPlayer gotcha) - the player just sits there
+                    // "ended" with a next item it'll never play, playWhenReady or not. Once that
+                    // happens the session stops being an active playback session, which is what
+                    // was letting Android drop the foreground service and hide the system media
+                    // notification even though a next track genuinely was queued up. Explicitly
+                    // nudging into it here closes that gap.
+                    if (c2.playbackState == Player.STATE_ENDED) {
+                        c2.seekToNextMediaItem()
+                        c2.play()
+                    }
                 }
             } catch (e: Exception) {
                 // BACKGROUND-STOP FIX: a real network/resolve failure right as the queue ran
