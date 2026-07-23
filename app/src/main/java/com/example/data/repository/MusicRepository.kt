@@ -553,7 +553,15 @@ class MusicRepository(
         // already heard rather than stopping the queue outright.
         recentTracks.firstOrNull { it.id != currentTrack.id }?.let { return@withContext it.copy(genre = genre) }
 
-        null
+        // NEVER-STOPS FIX: recentTracks only has real history after a few songs have played.
+        // On the very first song of a fresh session (e.g. tapping play on a single Search
+        // result) there's nothing else to fall back to here, so this used to return null -
+        // which is a legitimate "queue has nothing next" and, once that one song ends, is
+        // exactly what let the queue - and with it the system media notification - go
+        // completely empty. Replaying the track that just finished isn't ideal, but it
+        // guarantees this function never hands back null purely because it's too early in
+        // the session, so playback (and the notification bar) never just stops dead.
+        currentTrack.copy(genre = genre)
     }
 
     /** Fetches lyrics from LRCLIB (free, no key). Returns null if the track isn't found - no placeholder text. */
